@@ -26,7 +26,7 @@ papka = os.path.isdir(db_dir)
 if papka == False:
     os.mkdir(db_dir)
 
-    
+
 botslLogo = (color.OKGREEN + r"""
  ___                _    ___      _   
 / __|__ ___ _____  | |  |_ _|_ _ | |__
@@ -423,40 +423,49 @@ def main():
             print(dec(color.RED + 'Categories' + color.END))
             cursor.execute("PRAGMA key={}".format(account_pass))
             cursor.execute('select category from links GROUP BY category')
-            results = numpy.array(cursor.fetchall(), dtype=str) 
-            item_uc = {j:i[0] for i,j in zip(results,[i + 1 for i in range(len(results))])}   
-            for i in item_uc:
-                print(color.RED + str(i) + color.END + ')--' + color.OKBLUE + item_uc[i] + color.OKBLUE)
-            print(color.RED + str(i + 1) + color.END + ')--' + color.OKBLUE + 'Exit' + color.OKBLUE)
-            usercomand = input('\n' + botslPrompt)
-            if usercomand == "Q":
-                main()
-                break
-            elif usercomand == str(i + 1):
-                main()
-            try:
+            if all_link[0] == 0:
+                print(color.RED + "no links" + color.END)
                 while True:
-                    clearScr()
-                    print(botslLogo)
-                    print(dec(color.RED + 'Categories: ' + color.END + item_uc[int(usercomand)]))
-                    cursor.execute("PRAGMA key={}".format(account_pass))
-                    sql = ('select * from links where category = ?')
-                    cursor.execute(sql, (item_uc[int(usercomand)],))
-                    results = numpy.array(cursor.fetchall(), dtype=str) 
-                    for i in results:
-                        print(color.OKBLUE + 'id: ' + color.END + i[0] + color.OKBLUE +  
-                            '\nlink: ' + color.END + i[1] + color.OKBLUE + 
-                            '\ninfo: ' + color.END + i[2] + color.OKBLUE + 
-                            '\ncategory: ' + color.END + i[3] + color.OKBLUE + 
-                            '\ndata: ' + color.END + i[4] + color.OKBLUE + '\n')
                     print(color.RED + 'Q)--GO BACK\n' + color.END)
                     uc = input(botslPrompt)
                     if uc == 'Q':
+                        main()
                         break
-            except:
-                pass
-            else:
-                main()
+            else:        
+                results = numpy.array(cursor.fetchall(), dtype=str) 
+                item_uc = {j:i[0] for i,j in zip(results,[i + 1 for i in range(len(results))])}   
+                for i in item_uc:
+                    print(color.RED + str(i) + color.END + ')--' + color.OKBLUE + item_uc[i] + color.OKBLUE)
+                print(color.RED + str(i + 1) + color.END + ')--' + color.OKBLUE + 'Exit' + color.OKBLUE)
+                usercomand = input('\n' + botslPrompt)
+                if usercomand == "Q":
+                    main()
+                    break
+                elif usercomand == str(i + 1):
+                    main()
+                try:
+                    while True:
+                        clearScr()
+                        print(botslLogo)
+                        print(dec(color.RED + 'Categories: ' + color.END + item_uc[int(usercomand)]))
+                        cursor.execute("PRAGMA key={}".format(account_pass))
+                        sql = ('select * from links where category = ?')
+                        cursor.execute(sql, (item_uc[int(usercomand)],))
+                        results = numpy.array(cursor.fetchall(), dtype=str) 
+                        for i in results:
+                            print(color.OKBLUE + 'id: ' + color.END + i[0] + color.OKBLUE +  
+                                '\nlink: ' + color.END + i[1] + color.OKBLUE + 
+                                '\ninfo: ' + color.END + i[2] + color.OKBLUE + 
+                                '\ncategory: ' + color.END + i[3] + color.OKBLUE + 
+                                '\ndata: ' + color.END + i[4] + color.OKBLUE + '\n')
+                        print(color.RED + 'Q)--GO BACK\n' + color.END)
+                        uc = input(botslPrompt)
+                        if uc == 'Q':
+                            break
+                except:
+                    pass
+                else:
+                    main()
     elif usercomand == '5':
         clearScr()
         sys.exit()
