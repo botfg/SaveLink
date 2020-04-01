@@ -22,6 +22,11 @@ botslPrompt = (color.OKGREEN + "sl ~# " + color.END)
 db_dir = ('/home/{}/.savelink/'.format(getpass.getuser()))
 
 
+papka = os.path.isdir(db_dir)
+if papka == False:
+    os.mkdir(db_dir)
+
+    
 botslLogo = (color.OKGREEN + r"""
  ___                _    ___      _   
 / __|__ ___ _____  | |  |_ _|_ _ | |__
