@@ -112,12 +112,14 @@ def main():
     cursor.execute("PRAGMA key={}".format(account_pass))
     cursor.execute('select count(link) from links')
     all_link = cursor.fetchone()
+    cursor.execute('select category from links GROUP BY category')
+    all_category = numpy.array(cursor.fetchall(), dtype=str) 
     print(botslLogo)
     print(dec(color.RED + 'options' + color.END))
-    print(color.RED + '1' + color.END + ')--' + color.OKBLUE + 'Add' + color.OKBLUE)
+    print(color.RED + '1' + color.END + ')--' + color.OKBLUE + 'Add' + color.END)
     print(color.RED + '2' + color.END + ')--' + color.OKBLUE + 'View' + color.END + '(' + str(all_link[0]) + ')')
     print(color.RED + '3' + color.END + ')--' + color.OKBLUE + 'Etc' + color.END)
-    print(color.RED + '4' + color.END + ')--' + color.OKBLUE + 'Categories' + color.OKBLUE)
+    print(color.RED + '4' + color.END + ')--' + color.OKBLUE + 'Categories' + color.END + '(' + str(all_category.size) + ')')
     print(color.RED + '5' + color.END + ')--' + color.OKBLUE + 'Exit\n' + color.END)
     usercomand = input(botslPrompt)
     clearScr()
@@ -224,11 +226,16 @@ def main():
                     cursor.execute('select id, link, info, time, category from links')
                     results = numpy.array(cursor.fetchall(), dtype=str)
                     info_poisk = input(color.OKBLUE + 'search word: ' + color.END)
+                    print("")
                     if info_poisk == 'Q':
                         main()
                     for i in results:
                         if info_poisk in i[2] or info_poisk in i[4]:
-                            print('id: ' + i[0] + '\nlink: ' + i[1] + '\ninfo: ' + i[2] + '\ncategory: ' + i[4] + '\ndata: ' + str(i[3]) + '\n')
+                            print(color.OKBLUE + 'id: ' + color.END + i[0] + color.OKBLUE +  
+                                '\nlink: ' + color.END + i[1] + color.OKBLUE + 
+                                '\ninfo: ' + color.END + i[2] + color.OKBLUE + 
+                                '\ncategory: ' + color.END + i[4] + color.OKBLUE + 
+                                '\ndata: ' + color.END + i[3] + color.OKBLUE + '\n')                            
                     while True:
                         print(color.RED + 'Q)--GO BACK\n' + color.END)
                         uc = input(botslPrompt)
@@ -274,8 +281,9 @@ def main():
                             cursor.execute("PRAGMA key={}".format(account_pass))
                             cursor.execute('select id, link, info, time, category from links')
                             results = numpy.array(cursor.fetchall(), dtype=str)
+                            print("")
                             for i in results:
-                                print(color.OKBLUE + 'id: ' + color.END + str(i[0]) + color.OKBLUE +  '\nlink: ' + color.END + i[1] + color.OKBLUE + '\ninfo: ' + color.END + i[2] + color.OKBLUE + color.OKBLUE + '\ncategory: ' + color.END + i[4] + '\ndata: ' + color.END + str(i[3]) + '\n')
+                                print(color.OKBLUE + 'id: ' + color.END + str(i[0]) + color.OKBLUE +  '\nlink: ' + color.END + i[1] + color.OKBLUE + '\ninfo: ' + color.END + i[2] + color.OKBLUE  + '\ncategory: ' + color.END + i[4] + color.OKBLUE + '\ndata: ' + color.END + str(i[3]) + '\n')
                             break
                         elif uc == 'n':
                             break
@@ -299,7 +307,7 @@ def main():
                     clearScr()
                     print(botslLogo)
                     print(dec(color.RED + 'Edit' + color.END))
-                    print(color.OKBLUE + 'id: ' + color.END + str(i[0]) + color.OKBLUE +  '\nlink: ' + color.END + i[1] + color.OKBLUE + '\ninfo: ' + color.END + i[2] + color.OKBLUE + '\ndata: ' + color.END + str(i[3]) + '\n')
+                    print(color.OKBLUE + 'id: ' + color.END + str(i[0]) + color.OKBLUE +  '\nlink: ' + color.END + i[1] + color.OKBLUE + '\ninfo: ' + color.END + i[2] + color.OKBLUE + '\ncategory: ' + color.END + i[3] + color.OKBLUE + '\ndata: ' + color.END + str(i[4]) + '\n')
                     while True:
                             print(color.RED + '1' + color.END + ')--' + color.OKBLUE + 'Remove' + color.OKBLUE)
                             print(color.RED + '2' + color.END + ')--' + color.OKBLUE + 'Change the link' + color.END)
@@ -309,9 +317,9 @@ def main():
                             usercomand = input(botslPrompt)
                             if usercomand == '1':
                                 clearScr()
-                                print(botslPrompt)
+                                print(botslLogo)
                                 print(dec(color.RED + 'Remove' + color.END))
-                                usercomand = input(color.OKBLUE + '[Y/n] Remove: ' + color.END +  i[1] + color.OKBLUE + ' info: ' + color.END + [2] + ': ')            
+                                usercomand = input(color.OKBLUE + '[Y/n] Remove: ' + color.END +  str(i[1]) + color.OKBLUE + ' info: ' + color.END + i[2] + ': ')            
                                 if usercomand == "Y":
                                     sql = ("""DELETE FROM links WHERE id = ?""")
                                     cursor.execute(sql, (link_id,))
@@ -323,9 +331,9 @@ def main():
                                     break
                             elif usercomand == '2':
                                 clearScr()
-                                print(botslPrompt)
+                                print(botslLogo)
                                 print(dec(color.RED + 'Change the link' + color.END))
-                                print(color.OKBLUE + 'id: ' + color.END + str(i[0]) + color.OKBLUE +  '\nlink: ' + color.END + i[1] + color.OKBLUE + '\ninfo: ' + color.END + i[2] + color.OKBLUE + '\ndata: ' + color.END + str(i[3]) + '\n')
+                                print(color.OKBLUE + 'id: ' + color.END + str(i[0]) + color.OKBLUE +  '\nlink: ' + color.END + i[1] + color.OKBLUE + '\ninfo: ' + color.END + i[2] + color.OKBLUE  + '\ncategory: ' + color.END + i[3] + color.OKBLUE + '\ndata: ' + color.END + i[4] + '\n')
                                 while True:
                                     new_link = input(color.OKBLUE + 'enter a new link: ' + color.END)
                                     usercomand = input(color.OKBLUE + '[Y/n] replace ' + color.END +  i[1]  + color.OKBLUE + ' on the ' + color.END + new_link + ': ')            
@@ -340,9 +348,9 @@ def main():
                                         break                        
                             elif usercomand == '3':
                                 clearScr()
-                                print(botslPrompt)
+                                print(botslLogo)
                                 print(dec(color.RED + 'Change info' + color.END))
-                                print(color.OKBLUE + 'id: ' + color.END + str(i[0]) + color.OKBLUE +  '\nlink: ' + color.END + i[1] + color.OKBLUE + '\ninfo: ' + color.END + i[2] + color.OKBLUE + '\ndata: ' + color.END + str(i[3]) + '\n')
+                                print(color.OKBLUE + 'id: ' + color.END + str(i[0]) + color.OKBLUE +  '\nlink: ' + color.END + i[1] + color.OKBLUE + '\ninfo: ' + color.END + i[2] + color.OKBLUE  + '\ncategory: ' + color.END + i[3] + color.OKBLUE + '\ndata: ' + color.END + i[4] + '\n')
                                 while True:
                                     new_info = input(color.OKBLUE + 'enter new info: ' + color.END)
                                     usercomand = input(color.OKBLUE + '[Y/n] replace ' + color.END +  i[2]  + color.OKBLUE + ' on the ' + color.END + new_info + ': ')            
@@ -357,19 +365,12 @@ def main():
                                         break 
                             elif usercomand == '4':
                                 clearScr()
-                                print(botslPrompt)
+                                print(botslLogo)
                                 print(dec(color.RED + 'Change category' + color.END))
-                                print(color.OKBLUE + 'id: ' + color.END + str(i[0]) + color.OKBLUE +  '\nlink: ' + color.END + i[1] + color.OKBLUE + '\ninfo: ' + color.END + i[2] + color.OKBLUE + '\ndata: ' + color.END + str(i[3]) + '\n')
-                                cursor.execute('select category from links')
-                                results = numpy.array(cursor.fetchall(), dtype=str)
-                                if results.size > 0:
-                                    category_str = ""
-                                    for i in results[0]:
-                                        category_str += str(i + ', ')
-                                print(color.OKBLUE + "categories: " + color.END + category_str[:-2])
+                                print(color.OKBLUE + 'id: ' + color.END + str(i[0]) + color.OKBLUE +  '\nlink: ' + color.END + i[1] + color.OKBLUE + '\ninfo: ' + color.END + i[2] + color.OKBLUE + '\ncategory: ' + color.END + i[3] + color.OKBLUE + '\ndata: ' + color.END + i[4] + '\n')
                                 while True:
                                     new_category = input(color.OKBLUE + 'enter new category: ' + color.END)
-                                    usercomand = input(color.OKBLUE + '[Y/n] replace ' + color.END +  i[4]  + color.OKBLUE + ' on the ' + color.END + new_category + ': ')            
+                                    usercomand = input(color.OKBLUE + '[Y/n] replace ' + color.END +  i[3]  + color.OKBLUE + ' on the ' + color.END + new_category + ': ')            
                                     if usercomand == "Y":
                                         sql = ("""UPDATE links SET category = ? WHERE id = ?""")
                                         cursor.execute(sql, (new_category, link_id))
@@ -443,7 +444,6 @@ def main():
                             '\ninfo: ' + color.END + i[2] + color.OKBLUE + 
                             '\ncategory: ' + color.END + i[3] + color.OKBLUE + 
                             '\ndata: ' + color.END + i[4] + color.OKBLUE + '\n')
-                    #
                     print(color.RED + 'Q)--GO BACK\n' + color.END)
                     uc = input(botslPrompt)
                     if uc == 'Q':
