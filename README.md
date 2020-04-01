@@ -1,4 +1,4 @@
-[![DeepSource](https://static.deepsource.io/deepsource-badge-light-mini.svg)](https://deepsource.io/gh/botfg/BotDr/?ref=repository-badge)
+[![DeepSource](https://static.deepsource.io/deepsource-badge-light-mini.svg)](https://deepsource.io/gh/botfg/SaveLink/?ref=repository-badge)
 
 # <center> SaveLink </center>
 #### SaveLink - a link manager written in python whose main goal is convenience and security
