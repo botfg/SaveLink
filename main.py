@@ -126,9 +126,24 @@ async def process_tag_choice(message: types.Message, state: FSMContext):
         return
     
     if message.text.lower() == "да":
+        # Создаем клавиатуру с существующими тегами и опцией создания нового
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text="Создать новый тег")],
+                [KeyboardButton(text="❌ Отменить")]
+            ],
+            resize_keyboard=True
+        )
+        
+        # Добавляем существующие теги
+        tags = await get_user_tags(message.from_user.id)
+        if tags:
+            for tag, _ in tags:
+                keyboard.keyboard.insert(-1, [KeyboardButton(text=tag)])
+        
         await message.answer(
-            "Введите тег:",
-            reply_markup=get_cancel_keyboard()
+            "Выберите существующий тег или создайте новый:",
+            reply_markup=keyboard
         )
         await state.set_state(UserState.waiting_for_tag)
     elif message.text.lower() == "нет":
@@ -158,22 +173,48 @@ async def process_tag(message: types.Message, state: FSMContext):
         await cancel_action(message, state)
         return
     
+    if message.text == "Создать новый тег":
+        await message.answer(
+            "Введите новый тег:",
+            reply_markup=get_cancel_keyboard()
+        )
+        await state.update_data(creating_new_tag=True)
+        return
+    
     data = await state.get_data()
     user_text = data.get("user_text")
+    creating_new_tag = data.get("creating_new_tag", False)
     
-    save_result = await save_message(message.from_user.id, user_text, message.text)
-    
-    if save_result:
-        await message.answer(
-            "Сообщение успешно сохранено с тегом!",
-            reply_markup=get_main_keyboard()
-        )
+    # Если это не создание нового тега, значит выбран существующий
+    if not creating_new_tag:
+        save_result = await save_message(message.from_user.id, user_text, message.text)
+        
+        if save_result:
+            await message.answer(
+                "Сообщение успешно сохранено с выбранным тегом!",
+                reply_markup=get_main_keyboard()
+            )
+        else:
+            await message.answer(
+                "Такая запись уже существует!",
+                reply_markup=get_main_keyboard()
+            )
+        await state.clear()
     else:
-        await message.answer(
-            "Такая запись уже существует!",
-            reply_markup=get_main_keyboard()
-        )
-    await state.clear()
+        # Сохраняем с новым тегом
+        save_result = await save_message(message.from_user.id, user_text, message.text)
+        
+        if save_result:
+            await message.answer(
+                "Сообщение успешно сохранено с новым тегом!",
+                reply_markup=get_main_keyboard()
+            )
+        else:
+            await message.answer(
+                "Такая запись уже существует!",
+                reply_markup=get_main_keyboard()
+            )
+        await state.clear()
 
 @dp.message(F.text == "Просмотреть записи")
 async def view_records(message: types.Message):
@@ -311,4 +352,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
