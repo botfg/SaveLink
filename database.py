@@ -74,11 +74,12 @@ async def get_tags(user_id: int):
     except Exception:
         return []
 
+
 async def get_messages_by_tag(user_id: int, tag: str):
     try:
         async with aiosqlite.connect('messages.db') as db:
             async with db.execute(
-                'SELECT message, description, timestamp FROM messages WHERE user_id = ? AND tag = ? ORDER BY timestamp DESC',
+                'SELECT message, description, timestamp FROM messages WHERE user_id = ? AND tag = ?',
                 (user_id, tag)
             ) as cursor:
                 return await cursor.fetchall()

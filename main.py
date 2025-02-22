@@ -1,15 +1,17 @@
 import asyncio
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import (
+    ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, 
+    InlineKeyboardButton, CallbackQuery
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config_reader import config
 from database import (
-    init_db, save_message, get_messages, delete_message_by_id, get_tags, 
-    get_messages_by_tag, delete_messages,
+    init_db, save_message, get_messages, get_tags, 
+    get_messages_by_tag, delete_messages, delete_message_by_id,
     validate_text, validate_description, validate_tag
 )
 
@@ -27,6 +29,7 @@ class UserState(StatesGroup):
     waiting_for_tag_choice = State()
     waiting_for_tag = State()
     waiting_for_deletion_confirmation = State()
+    waiting_for_final_confirmation = State()
     waiting_for_tag_selection = State()
 
 bot = Bot(token=config.bot_token.get_secret_value())
@@ -53,27 +56,40 @@ def get_cancel_keyboard():
         [KeyboardButton(text="❌ Отменить")]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+def get_skip_keyboard():
+    kb = [
+        [KeyboardButton(text="⏩ Пропустить")],
+        [KeyboardButton(text="❌ Отменить")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
 async def create_tags_keyboard(user_id: int):
     try:
         tags = await get_tags(user_id)
-        if not tags:
+        if not tags or len(tags) == 0:
             return None
         
         kb = []
         for tag, count in tags:
-            kb.append([KeyboardButton(text=f"{tag} ({count})")])
-        kb.append([KeyboardButton(text="❌ Отменить")])
+            if tag != "no_tag":  # Исключаем записи без тегов
+                kb.append([KeyboardButton(text=f"{tag} ({count})")])
         
+        if len(kb) == 0:  # Если после фильтрации не осталось тегов
+            return None
+            
+        kb.append([KeyboardButton(text="❌ Отменить")])
         return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-    except Exception:
+    except Exception as e:
+        print(f"Error in create_tags_keyboard: {e}")  # Для отладки
         return None
+
 
 async def check_access(message: types.Message):
     if message.from_user.id != ALLOWED_USER_ID:
         await message.answer("Извините, у вас нет доступа к этому боту.")
         return False
     return True
-
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     if not await check_access(message):
@@ -126,23 +142,13 @@ async def process_text(message: types.Message, state: FSMContext):
     
     await state.update_data(user_text=message.text.strip())
     
-    # Создаем клавиатуру с возможностью пропустить описание
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="⏩ Пропустить")],
-            [KeyboardButton(text="❌ Отменить")]
-        ],
-        resize_keyboard=True
-    )
-    
     await message.answer(
         "Введите описание для записи\n"
         "(или нажмите «⏩ Пропустить» чтобы продолжить без описания):",
-        reply_markup=keyboard
+        reply_markup=get_skip_keyboard()
     )
     await state.set_state(UserState.waiting_for_description)
-    
-    
+
 @dp.message(UserState.waiting_for_description)
 async def process_description(message: types.Message, state: FSMContext):
     if not await check_access(message):
@@ -160,7 +166,7 @@ async def process_description(message: types.Message, state: FSMContext):
         if not is_valid:
             await message.answer(
                 f"❌ Ошибка: {error_message}",
-                reply_markup=get_cancel_keyboard()
+                reply_markup=get_skip_keyboard()
             )
             return
         await state.update_data(description=message.text.strip())
@@ -170,7 +176,6 @@ async def process_description(message: types.Message, state: FSMContext):
         reply_markup=get_tag_choice_keyboard()
     )
     await state.set_state(UserState.waiting_for_tag_choice)
-
 @dp.message(UserState.waiting_for_tag_choice)
 async def process_tag_choice(message: types.Message, state: FSMContext):
     if not await check_access(message):
@@ -238,6 +243,7 @@ async def process_tag_choice(message: types.Message, state: FSMContext):
             )
         finally:
             await state.clear()
+
 @dp.message(UserState.waiting_for_tag)
 async def process_tag(message: types.Message, state: FSMContext):
     if not await check_access(message):
@@ -295,7 +301,6 @@ async def process_tag(message: types.Message, state: FSMContext):
         )
     finally:
         await state.clear()
-
 @dp.message(F.text == "📋 Просмотреть записи")
 async def view_records(message: types.Message):
     if not await check_access(message):
@@ -337,33 +342,6 @@ async def view_records(message: types.Message):
             reply_markup=get_main_keyboard()
         )
 
-
-@dp.message(F.text == "🔍 Поиск по тегу")
-async def search_by_tag(message: types.Message, state: FSMContext):
-    if not await check_access(message):
-        return
-    
-    try:
-        keyboard = await create_tags_keyboard(message.from_user.id)
-        if not keyboard:
-            await message.answer(
-                "📭 У вас пока нет сохраненных тегов.",
-                reply_markup=get_main_keyboard()
-            )
-            return
-        
-        await message.answer(
-            "Выберите тег для поиска:",
-            reply_markup=keyboard
-        )
-        await state.set_state(UserState.waiting_for_tag_selection)
-    except Exception:
-        await message.answer(
-            "❌ Произошла ошибка при поиске. Попробуйте позже.",
-            reply_markup=get_main_keyboard()
-        )
-
-
 @dp.callback_query(lambda c: c.data.startswith('del_'))
 async def process_delete_callback(callback_query: CallbackQuery):
     try:
@@ -375,17 +353,109 @@ async def process_delete_callback(callback_query: CallbackQuery):
         # Извлекаем ID записи из callback_data
         record_id = int(callback_query.data.split('_')[1])
         
-        # Удаляем запись
-        if await delete_message_by_id(callback_query.from_user.id, record_id):
-            # Удаляем сообщение с кнопкой
-            await callback_query.message.delete()
-            await callback_query.answer("✅ Запись успешно удалена!")
-        else:
-            await callback_query.answer("❌ Не удалось удалить запись")
+        # Создаем клавиатуру подтверждения
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да", callback_data=f"confirm_del_{record_id}"),
+                InlineKeyboardButton(text="❌ Нет", callback_data=f"cancel_del_{record_id}")
+            ]
+        ])
+        
+        # Изменяем сообщение, добавляя запрос подтверждения
+        await callback_query.message.edit_text(
+            callback_query.message.text + "\n\n❓ Вы уверены, что хотите удалить эту запись?",
+            reply_markup=keyboard
+        )
+        await callback_query.answer()
+        
     except ValueError:
         await callback_query.answer("❌ Некорректный формат ID записи")
     except Exception:
         await callback_query.answer("❌ Произошла ошибка при удалении")
+
+@dp.callback_query(lambda c: c.data.startswith('confirm_del_'))
+async def confirm_delete_callback(callback_query: CallbackQuery):
+    try:
+        if callback_query.from_user.id != ALLOWED_USER_ID:
+            await callback_query.answer("У вас нет доступа к этой функции")
+            return
+        
+        record_id = int(callback_query.data.split('_')[2])
+        
+        if await delete_message_by_id(callback_query.from_user.id, record_id):
+            await callback_query.message.delete()
+            await callback_query.answer("✅ Запись успешно удалена!")
+        else:
+            await callback_query.answer("❌ Не удалось удалить запись")
+            
+    except Exception:
+        await callback_query.answer("❌ Произошла ошибка при удалении")
+
+@dp.callback_query(lambda c: c.data.startswith('cancel_del_'))
+async def cancel_delete_callback(callback_query: CallbackQuery):
+    try:
+        if callback_query.from_user.id != ALLOWED_USER_ID:
+            await callback_query.answer("У вас нет доступа к этой функции")
+            return
+        
+        record_id = int(callback_query.data.split('_')[2])
+        
+        # Возвращаем оригинальную клавиатуру
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="🗑 Удалить запись", 
+                callback_data=f"del_{record_id}"
+            )]
+        ])
+        
+        # Восстанавливаем оригинальный текст (убираем запрос подтверждения)
+        original_text = callback_query.message.text.split("\n\n❓")[0]
+        await callback_query.message.edit_text(
+            original_text,
+            reply_markup=keyboard
+        )
+        await callback_query.answer("Удаление отменено")
+        
+    except Exception:
+        await callback_query.answer("❌ Произошла ошибка")
+
+
+@dp.message(F.text == "🔍 Поиск по тегу")
+async def search_by_tag(message: types.Message, state: FSMContext):
+    if not await check_access(message):
+        return
+    
+    try:
+        tags = await get_tags(message.from_user.id)
+        
+        if not tags:
+            await message.answer(
+                "📭 У вас пока нет сохраненных тегов.",
+                reply_markup=get_main_keyboard()
+            )
+            return
+
+        # Создаем клавиатуру напрямую здесь
+        keyboard = ReplyKeyboardMarkup(
+            keyboard=[
+                [KeyboardButton(text=f"{tag} ({count})")] for tag, count in tags
+            ] + [[KeyboardButton(text="❌ Отменить")]],
+            resize_keyboard=True
+        )
+        
+        await message.answer(
+            "Выберите тег для поиска:",
+            reply_markup=keyboard
+        )
+        await state.set_state(UserState.waiting_for_tag_selection)
+        
+    except Exception as e:
+        print(f"Error in search_by_tag: {str(e)}")
+        await message.answer(
+            "❌ Произошла ошибка при поиске. Попробуйте позже.",
+            reply_markup=get_main_keyboard()
+        )
+
 
 
 @dp.message(UserState.waiting_for_tag_selection)
@@ -440,14 +510,27 @@ async def process_tag_selection(message: types.Message, state: FSMContext):
         )
         await state.clear()
 
+
+
 @dp.message(F.text == "🗑 Удалить всё")
 async def confirm_deletion(message: types.Message, state: FSMContext):
     if not await check_access(message):
         return
     
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="✅ Да, удалить всё")],
+            [KeyboardButton(text="❌ Нет, отменить")],
+        ],
+        resize_keyboard=True
+    )
+    
     await message.answer(
-        "❓ Вы уверены, что хотите удалить все записи?",
-        reply_markup=get_tag_choice_keyboard()
+        "⚠️ ВНИМАНИЕ!\n\n"
+        "Вы собираетесь удалить ВСЕ сохраненные записи.\n"
+        "Это действие нельзя будет отменить.\n\n"
+        "Вы действительно хотите удалить все записи?",
+        reply_markup=keyboard
     )
     await state.set_state(UserState.waiting_for_deletion_confirmation)
 
@@ -457,7 +540,45 @@ async def process_deletion(message: types.Message, state: FSMContext):
         return
     
     try:
-        if message.text.lower() == "да":
+        if message.text == "✅ Да, удалить всё":
+            # Запрашиваем повторное подтверждение
+            keyboard = ReplyKeyboardMarkup(
+                keyboard=[
+                    [KeyboardButton(text="✅ Подтверждаю удаление")],
+                    [KeyboardButton(text="❌ Отменить удаление")],
+                ],
+                resize_keyboard=True
+            )
+            
+            await message.answer(
+                "⚠️ Последнее предупреждение!\n\n"
+                "Вы точно уверены, что хотите удалить ВСЕ записи?\n"
+                "Это действие нельзя будет отменить!",
+                reply_markup=keyboard
+            )
+            await state.set_state(UserState.waiting_for_final_confirmation)
+            
+        elif message.text == "❌ Нет, отменить":
+            await message.answer(
+                "↩️ Удаление отменено.",
+                reply_markup=get_main_keyboard()
+            )
+            await state.clear()
+            
+    except Exception:
+        await message.answer(
+            "❌ Произошла ошибка. Попробуйте позже.",
+            reply_markup=get_main_keyboard()
+        )
+        await state.clear()
+
+@dp.message(UserState.waiting_for_final_confirmation)
+async def process_final_deletion(message: types.Message, state: FSMContext):
+    if not await check_access(message):
+        return
+    
+    try:
+        if message.text == "✅ Подтверждаю удаление":
             if await delete_messages(message.from_user.id):
                 await message.answer(
                     "🗑 Все записи успешно удалены!",
@@ -468,7 +589,7 @@ async def process_deletion(message: types.Message, state: FSMContext):
                     "❌ Произошла ошибка при удалении записей.",
                     reply_markup=get_main_keyboard()
                 )
-        elif message.text.lower() == "нет":
+        else:
             await message.answer(
                 "↩️ Удаление отменено.",
                 reply_markup=get_main_keyboard()
