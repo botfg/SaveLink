@@ -5,6 +5,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, 
     InlineKeyboardButton, CallbackQuery
 )
+from aiogram.types import LinkPreviewOptions
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -301,6 +302,8 @@ async def process_tag(message: types.Message, state: FSMContext):
         )
     finally:
         await state.clear()
+
+
 @dp.message(F.text == "📋 Просмотреть записи")
 async def view_records(message: types.Message):
     if not await check_access(message):
@@ -330,7 +333,7 @@ async def view_records(message: types.Message):
                 )]
             ])
             
-            await message.answer(response, reply_markup=keyboard)
+            await message.answer(response, link_preview_options=LinkPreviewOptions(is_disabled=True), reply_markup=keyboard)
         
         await message.answer(
             "Выберите следующее действие:",
@@ -496,7 +499,7 @@ async def process_tag_selection(message: types.Message, state: FSMContext):
                 response = ""
         
         if response:
-            await message.answer(response)
+            await message.answer(response, link_preview_options=LinkPreviewOptions(is_disabled=True))
         
         await message.answer(
             "Выберите следующее действие:",
