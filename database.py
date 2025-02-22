@@ -55,12 +55,13 @@ async def get_messages(user_id: int):
     try:
         async with aiosqlite.connect('messages.db') as db:
             async with db.execute(
-                'SELECT message, tag, description, timestamp FROM messages WHERE user_id = ? ORDER BY timestamp DESC',
+                'SELECT id, message, tag, description, timestamp FROM messages WHERE user_id = ?',
                 (user_id,)
             ) as cursor:
                 return await cursor.fetchall()
     except Exception:
         return []
+
 
 async def get_tags(user_id: int):
     try:
@@ -88,6 +89,19 @@ async def delete_messages(user_id: int):
     try:
         async with aiosqlite.connect('messages.db') as db:
             await db.execute('DELETE FROM messages WHERE user_id = ?', (user_id,))
+            await db.commit()
+            return True
+    except Exception:
+        return False
+
+
+async def delete_message_by_id(user_id: int, message_id: int):
+    try:
+        async with aiosqlite.connect('messages.db') as db:
+            await db.execute(
+                'DELETE FROM messages WHERE user_id = ? AND id = ?',
+                (user_id, message_id)
+            )
             await db.commit()
             return True
     except Exception:

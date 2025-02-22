@@ -5,9 +5,10 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config_reader import config
 from database import (
-    init_db, save_message, get_messages, get_tags, 
+    init_db, save_message, get_messages, delete_message_by_id, get_tags, 
     get_messages_by_tag, delete_messages,
     validate_text, validate_description, validate_tag
 )
@@ -309,19 +310,22 @@ async def view_records(message: types.Message):
             )
             return
 
-        response = "📋 Ваши записи:\n\n"
-        for i, (text, tag, description, timestamp) in enumerate(records, 1):
-            response += f"{i}. Текст: {text}\n"
+        for record_id, text, tag, description, timestamp in records:
+            # Формируем текст сообщения
+            response = f"📝 Текст: {text}\n"
             if description:
-                response += f"📝 Описание: {description}\n"
-            response += f"🏷 Тег: {tag}\n⏰ Время: {timestamp}\n\n"
+                response += f"📋 Описание: {description}\n"
+            response += f"🏷 Тег: {tag}\n⏰ Время: {timestamp}"
             
-            if len(response) > 3500:
-                await message.answer(response)
-                response = ""
-        
-        if response:
-            await message.answer(response)
+            # Создаем инлайн кнопку для удаления
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="🗑 Удалить запись", 
+                    callback_data=f"del_{record_id}"
+                )]
+            ])
+            
+            await message.answer(response, reply_markup=keyboard)
         
         await message.answer(
             "Выберите следующее действие:",
@@ -332,6 +336,8 @@ async def view_records(message: types.Message):
             "❌ Произошла ошибка при получении записей. Попробуйте позже.",
             reply_markup=get_main_keyboard()
         )
+
+
 @dp.message(F.text == "🔍 Поиск по тегу")
 async def search_by_tag(message: types.Message, state: FSMContext):
     if not await check_access(message):
@@ -356,6 +362,31 @@ async def search_by_tag(message: types.Message, state: FSMContext):
             "❌ Произошла ошибка при поиске. Попробуйте позже.",
             reply_markup=get_main_keyboard()
         )
+
+
+@dp.callback_query(lambda c: c.data.startswith('del_'))
+async def process_delete_callback(callback_query: CallbackQuery):
+    try:
+        # Проверяем доступ
+        if callback_query.from_user.id != ALLOWED_USER_ID:
+            await callback_query.answer("У вас нет доступа к этой функции")
+            return
+        
+        # Извлекаем ID записи из callback_data
+        record_id = int(callback_query.data.split('_')[1])
+        
+        # Удаляем запись
+        if await delete_message_by_id(callback_query.from_user.id, record_id):
+            # Удаляем сообщение с кнопкой
+            await callback_query.message.delete()
+            await callback_query.answer("✅ Запись успешно удалена!")
+        else:
+            await callback_query.answer("❌ Не удалось удалить запись")
+    except ValueError:
+        await callback_query.answer("❌ Некорректный формат ID записи")
+    except Exception:
+        await callback_query.answer("❌ Произошла ошибка при удалении")
+
 
 @dp.message(UserState.waiting_for_tag_selection)
 async def process_tag_selection(message: types.Message, state: FSMContext):
