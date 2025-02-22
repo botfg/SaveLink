@@ -1,21 +1,18 @@
 import asyncio
-import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.exceptions import TelegramBadRequest
 from config_reader import config
-from database import init_db, save_message, get_user_messages, get_user_tags, delete_all_user_messages, get_messages_by_tag
+from database import init_db, save_message, get_messages, get_tags, get_messages_by_tag, delete_messages
 
 ALLOWED_USER_ID = config.allowed_user_id
 
-logging.basicConfig(level=logging.INFO)
-
 class UserState(StatesGroup):
     waiting_for_text = State()
+    waiting_for_description = State()  # Новое состояние для описания
     waiting_for_tag_choice = State()
     waiting_for_tag = State()
     waiting_for_deletion_confirmation = State()
@@ -26,10 +23,10 @@ dp = Dispatcher(storage=MemoryStorage())
 
 def get_main_keyboard():
     kb = [
-        [KeyboardButton(text="Добавить запись")],
-        [KeyboardButton(text="Просмотреть записи")],
-        [KeyboardButton(text="Поиск по тегу")],
-        [KeyboardButton(text="Удалить всё")]
+        [KeyboardButton(text="📝 Добавить запись")],
+        [KeyboardButton(text="📋 Просмотреть записи")],
+        [KeyboardButton(text="🔍 Поиск по тегу")],
+        [KeyboardButton(text="🗑 Удалить всё")]
     ]
     keyboard = ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
     return keyboard
@@ -50,7 +47,7 @@ def get_cancel_keyboard():
     return keyboard
 
 async def create_tags_keyboard(user_id: int):
-    tags = await get_user_tags(user_id)
+    tags = await get_tags(user_id)
     if not tags:
         return None
     
@@ -66,18 +63,17 @@ async def check_access(message: types.Message):
         await message.answer("Извините, у вас нет доступа к этому боту.")
         return False
     return True
-
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     if not await check_access(message):
         return
     
     await message.answer(
-        "Привет! Я бот для сохранения заметок. Выберите действие:",
+        "👋 Привет! Я бот для сохранения заметок. Выберите действие:",
         reply_markup=get_main_keyboard()
     )
 
-@dp.message(F.text == "Добавить запись")
+@dp.message(F.text == "📝 Добавить запись")
 async def add_record(message: types.Message, state: FSMContext):
     if not await check_access(message):
         return
@@ -111,11 +107,26 @@ async def process_text(message: types.Message, state: FSMContext):
     await state.update_data(user_text=message.text)
     
     await message.answer(
+        "Введите описание для записи (или нажмите ❌ Отменить для пропуска):",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(UserState.waiting_for_description)
+
+@dp.message(UserState.waiting_for_description)
+async def process_description(message: types.Message, state: FSMContext):
+    if not await check_access(message):
+        return
+    
+    if message.text == "❌ Отменить":
+        await state.update_data(description=None)
+    else:
+        await state.update_data(description=message.text)
+    
+    await message.answer(
         "Добавить тег?",
         reply_markup=get_tag_choice_keyboard()
     )
     await state.set_state(UserState.waiting_for_tag_choice)
-
 @dp.message(UserState.waiting_for_tag_choice)
 async def process_tag_choice(message: types.Message, state: FSMContext):
     if not await check_access(message):
@@ -126,7 +137,6 @@ async def process_tag_choice(message: types.Message, state: FSMContext):
         return
     
     if message.text.lower() == "да":
-        # Создаем клавиатуру с существующими тегами и опцией создания нового
         keyboard = ReplyKeyboardMarkup(
             keyboard=[
                 [KeyboardButton(text="Создать новый тег")],
@@ -136,7 +146,7 @@ async def process_tag_choice(message: types.Message, state: FSMContext):
         )
         
         # Добавляем существующие теги
-        tags = await get_user_tags(message.from_user.id)
+        tags = await get_tags(message.from_user.id)
         if tags:
             for tag, _ in tags:
                 keyboard.keyboard.insert(-1, [KeyboardButton(text=tag)])
@@ -149,17 +159,23 @@ async def process_tag_choice(message: types.Message, state: FSMContext):
     elif message.text.lower() == "нет":
         data = await state.get_data()
         user_text = data.get("user_text")
+        description = data.get("description")
         
-        save_result = await save_message(message.from_user.id, user_text, "no_tag")
+        save_result = await save_message(
+            message.from_user.id,
+            user_text,
+            "no_tag",
+            description
+        )
         
         if save_result:
             await message.answer(
-                "Сообщение сохранено без тега!",
+                "✅ Сообщение сохранено без тега!",
                 reply_markup=get_main_keyboard()
             )
         else:
             await message.answer(
-                "Такая запись уже существует!",
+                "❌ Такая запись уже существует!",
                 reply_markup=get_main_keyboard()
             )
         await state.clear()
@@ -183,55 +199,47 @@ async def process_tag(message: types.Message, state: FSMContext):
     
     data = await state.get_data()
     user_text = data.get("user_text")
+    description = data.get("description")
     creating_new_tag = data.get("creating_new_tag", False)
     
-    # Если это не создание нового тега, значит выбран существующий
-    if not creating_new_tag:
-        save_result = await save_message(message.from_user.id, user_text, message.text)
-        
-        if save_result:
-            await message.answer(
-                "Сообщение успешно сохранено с выбранным тегом!",
-                reply_markup=get_main_keyboard()
-            )
-        else:
-            await message.answer(
-                "Такая запись уже существует!",
-                reply_markup=get_main_keyboard()
-            )
-        await state.clear()
+    save_result = await save_message(
+        message.from_user.id,
+        user_text,
+        message.text,
+        description
+    )
+    
+    if save_result:
+        action_type = "новым" if creating_new_tag else "существующим"
+        await message.answer(
+            f"✅ Сообщение успешно сохранено с {action_type} тегом!",
+            reply_markup=get_main_keyboard()
+        )
     else:
-        # Сохраняем с новым тегом
-        save_result = await save_message(message.from_user.id, user_text, message.text)
-        
-        if save_result:
-            await message.answer(
-                "Сообщение успешно сохранено с новым тегом!",
-                reply_markup=get_main_keyboard()
-            )
-        else:
-            await message.answer(
-                "Такая запись уже существует!",
-                reply_markup=get_main_keyboard()
-            )
-        await state.clear()
-
-@dp.message(F.text == "Просмотреть записи")
+        await message.answer(
+            "❌ Такая запись уже существует!",
+            reply_markup=get_main_keyboard()
+        )
+    await state.clear()
+@dp.message(F.text == "📋 Просмотреть записи")
 async def view_records(message: types.Message):
     if not await check_access(message):
         return
     
-    records = await get_user_messages(message.from_user.id)
+    records = await get_messages(message.from_user.id)
     if not records:
         await message.answer(
-            "У вас пока нет сохраненных записей.",
+            "📭 У вас пока нет сохраненных записей.",
             reply_markup=get_main_keyboard()
         )
         return
 
-    response = "Ваши записи:\n\n"
-    for i, (text, tag, timestamp) in enumerate(records, 1):
-        response += f"{i}. Текст: {text}\nТег: {tag}\nВремя: {timestamp}\n\n"
+    response = "📋 Ваши записи:\n\n"
+    for i, (text, tag, description, timestamp) in enumerate(records, 1):
+        response += f"{i}. Текст: {text}\n"
+        if description:
+            response += f"📝 Описание: {description}\n"
+        response += f"🏷 Тег: {tag}\n⏰ Время: {timestamp}\n\n"
         
         if len(response) > 3500:
             await message.answer(response)
@@ -245,7 +253,7 @@ async def view_records(message: types.Message):
         reply_markup=get_main_keyboard()
     )
 
-@dp.message(F.text == "Поиск по тегу")
+@dp.message(F.text == "🔍 Поиск по тегу")
 async def search_by_tag(message: types.Message, state: FSMContext):
     if not await check_access(message):
         return
@@ -253,7 +261,7 @@ async def search_by_tag(message: types.Message, state: FSMContext):
     keyboard = await create_tags_keyboard(message.from_user.id)
     if not keyboard:
         await message.answer(
-            "У вас пока нет сохраненных тегов.",
+            "📭 У вас пока нет сохраненных тегов.",
             reply_markup=get_main_keyboard()
         )
         return
@@ -278,20 +286,23 @@ async def process_tag_selection(message: types.Message, state: FSMContext):
         return
     
     # Извлекаем тег из формата "тег (количество)"
-    tag = message.text.split(" (")[0]
+    tag = message.text.split(" (")[0] if "(" in message.text else message.text
     
     records = await get_messages_by_tag(message.from_user.id, tag)
     if not records:
         await message.answer(
-            f"Записи с тегом '{tag}' не найдены.",
+            f"📭 Записи с тегом '{tag}' не найдены.",
             reply_markup=get_main_keyboard()
         )
         await state.clear()
         return
 
-    response = f"Записи с тегом '{tag}':\n\n"
-    for i, (text, tag, timestamp) in enumerate(records, 1):
-        response += f"{i}. Текст: {text}\nВремя: {timestamp}\n\n"
+    response = f"🔍 Записи с тегом '{tag}':\n\n"
+    for i, (text, description, timestamp) in enumerate(records, 1):
+        response += f"{i}. Текст: {text}\n"
+        if description:
+            response += f"📝 Описание: {description}\n"
+        response += f"⏰ Время: {timestamp}\n\n"
         
         if len(response) > 3500:
             await message.answer(response)
@@ -305,14 +316,13 @@ async def process_tag_selection(message: types.Message, state: FSMContext):
         reply_markup=get_main_keyboard()
     )
     await state.clear()
-
-@dp.message(F.text == "Удалить всё")
+@dp.message(F.text == "🗑 Удалить всё")
 async def confirm_deletion(message: types.Message, state: FSMContext):
     if not await check_access(message):
         return
     
     await message.answer(
-        "Вы хотите удалить все записи?",
+        "❓ Вы уверены, что хотите удалить все записи?",
         reply_markup=get_tag_choice_keyboard()
     )
     await state.set_state(UserState.waiting_for_deletion_confirmation)
@@ -323,14 +333,14 @@ async def process_deletion(message: types.Message, state: FSMContext):
         return
     
     if message.text.lower() == "да":
-        await delete_all_user_messages(message.from_user.id)
+        await delete_messages(message.from_user.id)
         await message.answer(
-            "Все записи успешно удалены!",
+            "🗑 Все записи успешно удалены!",
             reply_markup=get_main_keyboard()
         )
     elif message.text.lower() == "нет":
         await message.answer(
-            "Удаление отменено.",
+            "↩️ Удаление отменено.",
             reply_markup=get_main_keyboard()
         )
     
