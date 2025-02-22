@@ -125,17 +125,33 @@ async def process_text(message: types.Message, state: FSMContext):
     
     await state.update_data(user_text=message.text.strip())
     
+    # Создаем клавиатуру с возможностью пропустить описание
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="⏩ Пропустить")],
+            [KeyboardButton(text="❌ Отменить")]
+        ],
+        resize_keyboard=True
+    )
+    
     await message.answer(
-        "Введите описание для записи (или нажмите ❌ Отменить для пропуска):",
-        reply_markup=get_cancel_keyboard()
+        "Введите описание для записи\n"
+        "(или нажмите «⏩ Пропустить» чтобы продолжить без описания):",
+        reply_markup=keyboard
     )
     await state.set_state(UserState.waiting_for_description)
+    
+    
 @dp.message(UserState.waiting_for_description)
 async def process_description(message: types.Message, state: FSMContext):
     if not await check_access(message):
         return
     
     if message.text == "❌ Отменить":
+        await cancel_action(message, state)
+        return
+    
+    if message.text == "⏩ Пропустить":
         await state.update_data(description=None)
     else:
         # Валидация описания
