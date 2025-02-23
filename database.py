@@ -14,8 +14,8 @@ async def init_db():
                 UNIQUE(user_id, message, tag)
             )
         ''')
-        await db.execute('CREATE INDEX idx_messages_user_id ON messages(user_id)')
-        await db.execute('CREATE INDEX idx_messages_tag ON messages(tag)')
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id)')
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_messages_tag ON messages(tag)')
         await db.commit()
 
 

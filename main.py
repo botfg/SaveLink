@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -613,6 +614,9 @@ async def export_data(message: types.Message):
             document=FSInputFile(filename),
             caption="Ваши данные успешно экспортированы 📄"
         )
+            # Удаление файла после отправки
+        if os.path.exists(filename):
+            os.remove(filename)
     except Exception as e:
         print(f"Export error: {str(e)}")
         await message.answer("❌ Произошла ошибка при экспорте данных")
