@@ -1,9 +1,11 @@
 import asyncio
+import json
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, 
-    InlineKeyboardButton, CallbackQuery, LinkPreviewOptions
+    InlineKeyboardButton, CallbackQuery, LinkPreviewOptions, FSInputFile
 )
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -12,7 +14,7 @@ from config_reader import config
 from database import (
     init_db, save_message, get_messages, get_tags, 
     get_messages_by_tag, delete_messages, delete_message_by_id,
-    validate_text, validate_description, validate_tag
+    validate_text, validate_description, validate_tag, get_all_records, import_records
 )
 
 # Константы для валидации
@@ -31,6 +33,7 @@ class UserState(StatesGroup):
     waiting_for_deletion_confirmation = State()
     waiting_for_final_confirmation = State()
     waiting_for_tag_selection = State()
+    waiting_for_import = State()  # Новое состояние для импорта
 
 bot = Bot(token=config.bot_token.get_secret_value())
 dp = Dispatcher(storage=MemoryStorage())
@@ -40,9 +43,20 @@ def get_main_keyboard():
         [KeyboardButton(text="📝 Добавить запись")],
         [KeyboardButton(text="📋 Просмотреть записи")],
         [KeyboardButton(text="🔍 Поиск по тегу")],
-        [KeyboardButton(text="🗑 Удалить всё")]
+        [KeyboardButton(text="🗑 Удалить всё")],
+        [KeyboardButton(text="⚙️ Дополнительно")]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+
+def get_extra_keyboard():
+    kb = [
+        [KeyboardButton(text="📤 Экспорт данных")],
+        [KeyboardButton(text="📥 Импорт данных")],
+        [KeyboardButton(text="🔙 Назад")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
 
 def get_tag_choice_keyboard():
     kb = [
@@ -223,7 +237,8 @@ async def process_tag_choice(message: types.Message, state: FSMContext):
                 message.from_user.id,
                 user_text,
                 "no_tag",
-                description
+                description,
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # Добавляем timestamp
             )
             
             if save_result:
@@ -280,7 +295,8 @@ async def process_tag(message: types.Message, state: FSMContext):
             message.from_user.id,
             user_text,
             message.text.strip(),
-            description
+            description,
+            datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # Добавляем timestamp
         )
         
         if save_result:
@@ -541,6 +557,141 @@ async def confirm_deletion(message: types.Message, state: FSMContext):
     )
     await state.set_state(UserState.waiting_for_deletion_confirmation)
 
+
+@dp.message(F.text == "⚙️ Дополнительно")
+async def extra_menu(message: types.Message):
+    if not await check_access(message):
+        return
+    
+    await message.answer(
+        "Дополнительные действия:",
+        reply_markup=get_extra_keyboard()
+    )
+
+@dp.message(F.text == "🔙 Назад")
+async def back_to_main(message: types.Message):
+    await message.answer(
+        "Главное меню:",
+        reply_markup=get_main_keyboard()
+    )
+
+@dp.message(F.text == "📤 Экспорт данных")
+async def export_data(message: types.Message):
+    if not await check_access(message):
+        return
+    
+    try:
+        records = await get_all_records(message.from_user.id)
+        if not records:
+            await message.answer("В вашей базе нет записей для экспорта")
+            return
+
+        # Формируем структуру для экспорта
+        export_data = []
+        for record in records:
+            export_data.append({
+                "message": record[0],
+                "tag": record[1],
+                "description": record[2],
+                "timestamp": record[3]
+            })
+
+        # Создаем временный файл
+        filename = f"notes_export_{message.from_user.id}.json"
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(export_data, f, ensure_ascii=False, indent=2)
+
+        # Отправляем файл пользователю
+        await message.answer_document(
+            document=FSInputFile(filename),
+            caption="Ваши данные успешно экспортированы 📄"
+        )
+    except Exception as e:
+        print(f"Export error: {str(e)}")
+        await message.answer("❌ Произошла ошибка при экспорте данных")
+
+@dp.message(F.text == "📥 Импорт данных")
+async def import_data_start(message: types.Message, state: FSMContext):
+    if not await check_access(message):
+        return
+    
+    await message.answer(
+        "Пожалуйста, загрузите JSON-файл с данными для импорта:",
+        reply_markup=get_cancel_keyboard()
+    )
+    await state.set_state(UserState.waiting_for_import)
+
+@dp.message(UserState.waiting_for_import)
+async def process_import(message: types.Message, state: FSMContext):
+    if not await check_access(message):
+        return
+    
+    if message.text == "❌ Отменить":
+        await cancel_action(message, state)
+        return
+
+    try:
+        if not message.document:
+            await message.answer("Пожалуйста, загрузите файл в формате JSON")
+            return
+
+        # Скачиваем файл
+        file = await bot.get_file(message.document.file_id)
+        file_path = file.file_path
+        downloaded_file = await bot.download_file(file_path)
+
+        # Парсим JSON
+        data = json.loads(downloaded_file.read().decode("utf-8"))
+        
+        # Валидация и импорт данных
+        success_count = 0
+        errors = []
+        
+        for index, item in enumerate(data, 1):
+            try:
+                # Валидация полей
+                if not all(key in item for key in ["message", "tag", "description", "timestamp"]):
+                    raise ValueError("Неверная структура записи")
+                
+                # Проверка существования записи
+                existing = await get_messages(message.from_user.id)
+                exists = any(
+                    record[0] == item["message"] and 
+                    record[1] == item["tag"] and 
+                    record[2] == item["description"]
+                    for record in existing
+                )
+                
+                if not exists:
+                    await save_message(
+                        user_id=message.from_user.id,
+                        message=item["message"],
+                        tag=item["tag"],
+                        description=item["description"],
+                        timestamp=item["timestamp"]
+                    )
+                    success_count += 1
+                    
+            except Exception as e:
+                errors.append(f"Запись {index}: {str(e)}")
+        
+        # Формируем отчет
+        report = f"Импорт завершен:\nУспешно: {success_count}\nОшибок: {len(errors)}"
+        if errors:
+            report += "\n\nОшибки:\n" + "\n".join(errors[:5])  # Показываем первые 5 ошибок
+        
+        await message.answer(report)
+        await state.clear()
+        
+    except json.JSONDecodeError:
+        await message.answer("❌ Ошибка: файл не является валидным JSON")
+    except Exception as e:
+        await message.answer(f"❌ Произошла ошибка при импорте: {str(e)}")
+    finally:
+        await state.clear()
+
+
+
 @dp.message(UserState.waiting_for_deletion_confirmation)
 async def process_deletion(message: types.Message, state: FSMContext):
     if not await check_access(message):
@@ -618,6 +769,7 @@ async def handle_other_messages(message: types.Message):
         "Пожалуйста, используйте кнопки для взаимодействия с ботом:",
         reply_markup=get_main_keyboard()
     )
+
 
 async def main():
     try:

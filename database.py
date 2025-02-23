@@ -10,7 +10,7 @@ async def init_db():
                 message TEXT NOT NULL,
                 description TEXT,
                 tag TEXT DEFAULT 'no_tag',
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                timestamp TEXT NOT NULL,
                 UNIQUE(user_id, message, tag)
             )
         ''')
@@ -37,12 +37,13 @@ async def validate_tag(tag: str) -> tuple[bool, str]:
     if len(tag) > 100:
         return False, "Тег не должен превышать 100 символов!"
     return True, ""
-async def save_message(user_id: int, message: str, tag: str = "no_tag", description: str = None):
+
+async def save_message(user_id: int, message: str, tag: str = "no_tag", description: str = None, timestamp: str = None):
     try:
         async with aiosqlite.connect('messages.db') as db:
             await db.execute(
                 'INSERT INTO messages (user_id, message, tag, description, timestamp) VALUES (?, ?, ?, ?, ?)',
-                (user_id, message, tag, description, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                (user_id, message, tag, description, timestamp or datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
             )
             await db.commit()
             return True
@@ -109,3 +110,22 @@ async def delete_message_by_id(user_id: int, message_id: int):
             return True
     except Exception:
         return False
+
+
+
+async def get_all_records(user_id: int):
+    async with aiosqlite.connect('messages.db') as db:
+        cursor = await db.execute(
+            "SELECT message, tag, description, timestamp FROM messages WHERE user_id = ? ORDER BY timestamp DESC",
+            (user_id,)
+        )
+        return await cursor.fetchall()
+
+async def import_records(user_id: int, records: list):
+    async with aiosqlite.connect('messages.db') as db:
+        for record in records:
+            await db.execute(
+                "INSERT OR IGNORE INTO messages (user_id, message, tag, description, timestamp) VALUES (?, ?, ?, ?, ?)",
+                (user_id, record['message'], record['tag'], record['description'], record['timestamp'])
+            )
+        await db.commit()
