@@ -15,7 +15,7 @@ from config_reader import config
 from database import (
     init_db, save_message, get_messages, get_tags, 
     get_messages_by_tag, delete_messages, delete_message_by_id,
-    validate_text, validate_description, validate_tag, get_all_records, import_records
+    validate_text, validate_description, validate_tag, get_all_records
 )
 
 # Константы для валидации
@@ -34,7 +34,7 @@ class UserState(StatesGroup):
     waiting_for_deletion_confirmation = State()
     waiting_for_final_confirmation = State()
     waiting_for_tag_selection = State()
-    waiting_for_import = State()  # Новое состояние для импорта
+    waiting_for_import = State()
 
 bot = Bot(token=config.bot_token.get_secret_value())
 dp = Dispatcher(storage=MemoryStorage())

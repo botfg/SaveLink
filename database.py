@@ -121,12 +121,3 @@ async def get_all_records(user_id: int):
             (user_id,)
         )
         return await cursor.fetchall()
-
-async def import_records(user_id: int, records: list):
-    async with aiosqlite.connect('messages.db') as db:
-        for record in records:
-            await db.execute(
-                "INSERT OR IGNORE INTO messages (user_id, message, tag, description, timestamp) VALUES (?, ?, ?, ?, ?)",
-                (user_id, record['message'], record['tag'], record['description'], record['timestamp'])
-            )
-        await db.commit()
