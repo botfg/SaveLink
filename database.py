@@ -14,7 +14,9 @@ async def init_db():
                 UNIQUE(user_id, message, tag)
             )
         ''')
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_tag ON messages(tag)')
         await db.commit()
+
 
 async def validate_text(text: str) -> tuple[bool, str]:
     """Валидация текста сообщения"""
