@@ -43,7 +43,7 @@ async def save_message(user_id: int, message: str, tag: str = "no_tag", descript
         async with aiosqlite.connect('messages.db') as db:
             await db.execute(
                 'INSERT INTO messages (user_id, message, tag, description, timestamp) VALUES (?, ?, ?, ?, ?)',
-                (user_id, message, tag, description, timestamp or datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                (user_id, message, tag, description, timestamp or datetime.now().strftime('%m-%d-%Y %H:%M:%S'))
             )
             await db.commit()
             return True

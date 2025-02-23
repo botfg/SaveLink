@@ -190,6 +190,9 @@ async def process_description(message: types.Message, state: FSMContext):
         reply_markup=get_tag_choice_keyboard()
     )
     await state.set_state(UserState.waiting_for_tag_choice)
+
+
+
 @dp.message(UserState.waiting_for_tag_choice)
 async def process_tag_choice(message: types.Message, state: FSMContext):
     if not await check_access(message):
@@ -335,10 +338,12 @@ async def view_records(message: types.Message):
 
         for record_id, text, tag, description, timestamp in records:
             # Формируем текст сообщения
+            date_obj = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+            formatted_date = date_obj.strftime('%d %m %Y') 
             response = f"📝 Текст: {text}\n"
             if description:
                 response += f"📋 Описание: {description}\n"
-            response += f"🏷 Тег: {tag}\n⏰ Время: {timestamp}"
+            response += f"🏷 Тег: {tag}\n⏰ Время: {formatted_date}"
             
             # Создаем инлайн кнопку для удаления
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -505,10 +510,12 @@ async def process_tag_selection(message: types.Message, state: FSMContext):
         await message.answer(f"🔍 Записи с тегом '{tag}':")
 
         for record_id, text, description, timestamp in records:
+            date_obj = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+            formatted_date = date_obj.strftime('%d %m %Y')  # Новый формат
             response = f"📝 Текст: {text}\n"
             if description:
                 response += f"📋 Описание: {description}\n"
-            response += f"⏰ Время: {timestamp}"
+            response += f"⏰ Время: {formatted_date}"
             
             # Создаем инлайн кнопку для удаления
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
