@@ -39,6 +39,7 @@ class UserState(StatesGroup):
 bot = Bot(token=config.bot_token.get_secret_value())
 dp = Dispatcher(storage=MemoryStorage())
 
+
 def get_main_keyboard():
     kb = [
         [KeyboardButton(text="📝 Добавить запись")],
@@ -66,11 +67,13 @@ def get_tag_choice_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
+
 def get_cancel_keyboard():
     kb = [
         [KeyboardButton(text="❌ Отменить")]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
 
 def get_skip_keyboard():
     kb = [
@@ -105,6 +108,8 @@ async def check_access(message: types.Message):
         await message.answer("Извините, у вас нет доступа к этому боту.")
         return False
     return True
+
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     if not await check_access(message):
@@ -114,6 +119,7 @@ async def cmd_start(message: types.Message):
         "👋 Привет! Я бот для сохранения заметок. Выберите действие:",
         reply_markup=get_main_keyboard()
     )
+
 
 @dp.message(F.text == "📝 Добавить запись")
 async def add_record(message: types.Message, state: FSMContext):
@@ -126,6 +132,7 @@ async def add_record(message: types.Message, state: FSMContext):
     )
     await state.set_state(UserState.waiting_for_text)
 
+
 @dp.message(F.text == "❌ Отменить")
 async def cancel_action(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
@@ -136,6 +143,7 @@ async def cancel_action(message: types.Message, state: FSMContext):
         "Действие отменено. Выберите действие:",
         reply_markup=get_main_keyboard()
     )
+
 
 @dp.message(UserState.waiting_for_text)
 async def process_text(message: types.Message, state: FSMContext):
@@ -164,6 +172,7 @@ async def process_text(message: types.Message, state: FSMContext):
     )
     await state.set_state(UserState.waiting_for_description)
 
+
 @dp.message(UserState.waiting_for_description)
 async def process_description(message: types.Message, state: FSMContext):
     if not await check_access(message):
@@ -191,7 +200,6 @@ async def process_description(message: types.Message, state: FSMContext):
         reply_markup=get_tag_choice_keyboard()
     )
     await state.set_state(UserState.waiting_for_tag_choice)
-
 
 
 @dp.message(UserState.waiting_for_tag_choice)
@@ -262,6 +270,7 @@ async def process_tag_choice(message: types.Message, state: FSMContext):
             )
         finally:
             await state.clear()
+
 
 @dp.message(UserState.waiting_for_tag)
 async def process_tag(message: types.Message, state: FSMContext):
@@ -366,6 +375,7 @@ async def view_records(message: types.Message):
             reply_markup=get_main_keyboard()
         )
 
+
 @dp.callback_query(lambda c: c.data.startswith('del_'))
 async def process_delete_callback(callback_query: CallbackQuery):
     try:
@@ -397,6 +407,7 @@ async def process_delete_callback(callback_query: CallbackQuery):
     except Exception:
         await callback_query.answer("❌ Произошла ошибка при удалении")
 
+
 @dp.callback_query(lambda c: c.data.startswith('confirm_del_'))
 async def confirm_delete_callback(callback_query: CallbackQuery):
     try:
@@ -414,6 +425,7 @@ async def confirm_delete_callback(callback_query: CallbackQuery):
             
     except Exception:
         await callback_query.answer("❌ Произошла ошибка при удалении")
+
 
 @dp.callback_query(lambda c: c.data.startswith('cancel_del_'))
 async def cancel_delete_callback(callback_query: CallbackQuery):
@@ -481,7 +493,6 @@ async def search_by_tag(message: types.Message, state: FSMContext):
         )
 
 
-
 @dp.message(UserState.waiting_for_tag_selection)
 async def process_tag_selection(message: types.Message, state: FSMContext):
     if not await check_access(message):
@@ -542,7 +553,6 @@ async def process_tag_selection(message: types.Message, state: FSMContext):
         await state.clear()
 
 
-
 @dp.message(F.text == "🗑 Удалить всё")
 async def confirm_deletion(message: types.Message, state: FSMContext):
     if not await check_access(message):
@@ -576,12 +586,14 @@ async def extra_menu(message: types.Message):
         reply_markup=get_extra_keyboard()
     )
 
+
 @dp.message(F.text == "🔙 Назад")
 async def back_to_main(message: types.Message):
     await message.answer(
         "Главное меню:",
         reply_markup=get_main_keyboard()
     )
+
 
 @dp.message(F.text == "📤 Экспорт данных")
 async def export_data(message: types.Message):
@@ -621,6 +633,7 @@ async def export_data(message: types.Message):
         print(f"Export error: {str(e)}")
         await message.answer("❌ Произошла ошибка при экспорте данных")
 
+
 @dp.message(F.text == "📥 Импорт данных")
 async def import_data_start(message: types.Message, state: FSMContext):
     if not await check_access(message):
@@ -631,6 +644,7 @@ async def import_data_start(message: types.Message, state: FSMContext):
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(UserState.waiting_for_import)
+
 
 @dp.message(UserState.waiting_for_import)
 async def process_import(message: types.Message, state: FSMContext):
@@ -702,7 +716,6 @@ async def process_import(message: types.Message, state: FSMContext):
         await state.clear()
 
 
-
 @dp.message(UserState.waiting_for_deletion_confirmation)
 async def process_deletion(message: types.Message, state: FSMContext):
     if not await check_access(message):
@@ -741,6 +754,7 @@ async def process_deletion(message: types.Message, state: FSMContext):
         )
         await state.clear()
 
+
 @dp.message(UserState.waiting_for_final_confirmation)
 async def process_final_deletion(message: types.Message, state: FSMContext):
     if not await check_access(message):
@@ -771,6 +785,7 @@ async def process_final_deletion(message: types.Message, state: FSMContext):
     finally:
         await state.clear()
 
+
 @dp.message()
 async def handle_other_messages(message: types.Message):
     if not await check_access(message):
@@ -788,6 +803,7 @@ async def main():
         await dp.start_polling(bot)
     except Exception as e:
         print(f"Критическая ошибка: {e}")
+
 
 if __name__ == "__main__":
     asyncio.run(main())
