@@ -486,26 +486,31 @@ async def process_tag_selection(message: types.Message, state: FSMContext):
             await state.clear()
             return
 
-        response = f"🔍 Записи с тегом '{tag}':\n\n"
-        for i, (text, description, timestamp) in enumerate(records, 1):
-            response += f"{i}. Текст: {text}\n"
+        await message.answer(f"🔍 Записи с тегом '{tag}':")
+
+        for record_id, text, description, timestamp in records:
+            response = f"📝 Текст: {text}\n"
             if description:
-                response += f"📝 Описание: {description}\n"
-            response += f"⏰ Время: {timestamp}\n\n"
+                response += f"📋 Описание: {description}\n"
+            response += f"⏰ Время: {timestamp}"
             
-            if len(response) > 3500:
-                await message.answer(response)
-                response = ""
-        
-        if response:
-            await message.answer(response, link_preview_options=LinkPreviewOptions(is_disabled=True))
+            # Создаем инлайн кнопку для удаления
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(
+                    text="🗑 Удалить запись", 
+                    callback_data=f"del_{record_id}"
+                )]
+            ])
+            
+            await message.answer(response, link_preview_options=LinkPreviewOptions(is_disabled=True), reply_markup=keyboard)
         
         await message.answer(
             "Выберите следующее действие:",
             reply_markup=get_main_keyboard()
         )
         await state.clear()
-    except Exception:
+    except Exception as e:
+        print(f"Error in process_tag_selection: {str(e)}")
         await message.answer(
             "❌ Произошла ошибка при поиске. Попробуйте позже.",
             reply_markup=get_main_keyboard()
