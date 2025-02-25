@@ -1,5 +1,6 @@
 import asyncio
 import json
+import re
 import os
 from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
@@ -38,6 +39,13 @@ class UserState(StatesGroup):
 
 bot = Bot(token=config.bot_token.get_secret_value())
 dp = Dispatcher(storage=MemoryStorage())
+
+
+def is_url(text):
+    url_pattern = re.compile(
+        r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+    )
+    return bool(url_pattern.match(text))
 
 
 def get_main_keyboard():
@@ -82,6 +90,7 @@ def get_skip_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
+
 async def create_tags_keyboard(user_id: int):
     try:
         tags = await get_tags(user_id)
@@ -108,6 +117,27 @@ async def check_access(message: types.Message):
         await message.answer("Извините, у вас нет доступа к этому боту.")
         return False
     return True
+
+
+@dp.message(lambda message: is_url(message.text))
+async def handle_url(message: types.Message, state: FSMContext):
+    if not await check_access(message):
+        return
+    
+    # Сохраняем ссылку в состоянии
+    await state.update_data(temp_url=message.text)
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да", callback_data="save_url"),
+            InlineKeyboardButton(text="❌ Нет", callback_data="cancel_url")
+        ]
+    ])
+    
+    await message.answer(
+        "Создать запись с данной ссылкой?",
+        reply_markup=keyboard
+    )
 
 
 @dp.message(Command("start"))
@@ -374,6 +404,39 @@ async def view_records(message: types.Message):
             "❌ Произошла ошибка при получении записей. Попробуйте позже.",
             reply_markup=get_main_keyboard()
         )
+
+
+# Обработчик для кнопки "Да" при сохранении ссылки
+@dp.callback_query(lambda c: c.data == "save_url")
+async def process_save_url(callback_query: CallbackQuery, state: FSMContext):
+    if callback_query.from_user.id != ALLOWED_USER_ID:
+        await callback_query.answer("У вас нет доступа к этой функции")
+        return
+    
+    data = await state.get_data()
+    url = data.get("temp_url")
+    
+    if url:
+        await state.update_data(user_text=url)
+        await callback_query.message.edit_text(
+            "Ссылка будет сохранена. Введите описание или нажмите 'Пропустить'."
+        )
+        await callback_query.message.answer(
+            "Введите описание для ссылки:",
+            reply_markup=get_skip_keyboard()
+        )
+        await state.set_state(UserState.waiting_for_description)
+    else:
+        await callback_query.message.edit_text("Не удалось сохранить ссылку. Попробуйте снова.")
+    
+    await callback_query.answer()
+
+
+# Обработчик для кнопки "Нет" при отказе от сохранения ссылки
+@dp.callback_query(lambda c: c.data == "cancel_url")
+async def process_cancel_url(callback_query: CallbackQuery):
+    await callback_query.message.edit_text("Сохранение ссылки отменено.")
+    await callback_query.answer()
 
 
 @dp.callback_query(lambda c: c.data.startswith('del_'))
