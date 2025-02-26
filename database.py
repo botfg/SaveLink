@@ -1,6 +1,7 @@
 import aiosqlite
 from datetime import datetime
 
+
 async def init_db():
     async with aiosqlite.connect('messages.db') as db:
         await db.execute('''
@@ -27,17 +28,20 @@ async def validate_text(text: str) -> tuple[bool, str]:
         return False, "Текст не должен превышать 4096 символов!"
     return True, ""
 
+
 async def validate_description(description: str) -> tuple[bool, str]:
     """Валидация описания"""
     if description and len(description) > 1000:
         return False, "Описание не должно превышать 1000 символов!"
     return True, ""
 
+
 async def validate_tag(tag: str) -> tuple[bool, str]:
     """Валидация тега"""
     if len(tag) > 100:
         return False, "Тег не должен превышать 100 символов!"
     return True, ""
+
 
 async def save_message(user_id: int, message: str, tag: str = "no_tag", description: str = None, timestamp: str = None):
     try:
@@ -54,6 +58,7 @@ async def save_message(user_id: int, message: str, tag: str = "no_tag", descript
     except Exception:
         # Обработка других ошибок базы данных
         return False
+
 
 async def get_messages(user_id: int):
     try:
@@ -90,6 +95,7 @@ async def get_messages_by_tag(user_id: int, tag: str):
     except Exception:
         return []
 
+
 async def delete_messages(user_id: int):
     try:
         async with aiosqlite.connect('messages.db') as db:
@@ -111,7 +117,6 @@ async def delete_message_by_id(user_id: int, message_id: int):
             return True
     except Exception:
         return False
-
 
 
 async def get_all_records(user_id: int):
