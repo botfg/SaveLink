@@ -51,7 +51,6 @@ def is_url(text):
 
 def get_main_keyboard():
     kb = [
-        [KeyboardButton(text="📝 Добавить запись")],
         [KeyboardButton(text="📋 Просмотреть записи")],
         [KeyboardButton(text="🔍 Поиск по тегу")],
         [KeyboardButton(text="🗑 Удалить всё")],
@@ -150,18 +149,6 @@ async def cmd_start(message: types.Message):
         "👋 Привет! Я бот для сохранения заметок. Выберите действие:",
         reply_markup=get_main_keyboard()
     )
-
-
-@dp.message(F.text == "📝 Добавить запись")
-async def add_record(message: types.Message, state: FSMContext):
-    if not await check_access(message):
-        return
-    
-    await message.answer(
-        "Введите текст, который хотите сохранить:",
-        reply_markup=get_cancel_keyboard()
-    )
-    await state.set_state(UserState.waiting_for_text)
 
 
 @dp.message(F.text == "❌ Отменить")
