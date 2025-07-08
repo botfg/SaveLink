@@ -8,7 +8,18 @@ def get_main_keyboard() -> ReplyKeyboardMarkup:
     kb = [
         [KeyboardButton(text="📋 Просмотреть записи")],
         [KeyboardButton(text="🔍 Поиск по тегу")],
-        [KeyboardButton(text="🗑 Удалить всё")]
+        [KeyboardButton(text="⚙️ Дополнительно")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+def get_extra_keyboard() -> ReplyKeyboardMarkup:
+    """Возвращает клавиатуру с дополнительными действиями."""
+    kb = [
+        [KeyboardButton(text="📤 Создать резервную копию")],
+        # (ИЗМЕНЕНИЕ): Новая кнопка для восстановления
+        [KeyboardButton(text="📥 Восстановить из бекапа")],
+        [KeyboardButton(text="🗑 Удалить всё")],
+        [KeyboardButton(text="🔙 Назад")]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
@@ -41,7 +52,6 @@ def create_tags_keyboard(tags: list) -> ReplyKeyboardMarkup | None:
         return None
 
     kb_buttons = []
-    # **(Исправление 2)**: Добавляем кнопку "Без тега" в поиск
     for tag, count in tags:
         display_text = "Без тега" if tag == "no_tag" else tag
         kb_buttons.append([KeyboardButton(text=f"{display_text} ({count})")])

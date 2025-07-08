@@ -8,3 +8,4 @@ class UserState(StatesGroup):
     waiting_for_deletion_confirmation = State()
     waiting_for_final_confirmation = State()
     waiting_for_tag_selection = State()
+    waiting_for_restore_confirmation = State()

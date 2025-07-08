@@ -2,6 +2,7 @@ import asyncio
 import re
 import logging
 import html
+import os
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types, F
@@ -13,6 +14,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 
+# Локальные импорты
 from config_reader import config
 from database import (
     init_db, save_message, get_messages, get_tags,
@@ -20,11 +22,12 @@ from database import (
     validate_text, validate_name, validate_tag, get_message_by_id
 )
 from keyboards import (
-    get_main_keyboard, get_tag_choice_keyboard,
+    get_main_keyboard, get_extra_keyboard, get_tag_choice_keyboard,
     get_cancel_keyboard, get_skip_keyboard, create_tags_keyboard,
     get_delete_confirmation_keyboard
 )
 from states import UserState
+from gdrive_uploader import upload_database_backup, download_latest_backup
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -217,35 +220,119 @@ async def process_tag_selection(message: types.Message, state: FSMContext):
         await message.answer("Поиск отменен.", reply_markup=get_main_keyboard())
         await state.clear()
         return
-        
     raw_tag_text = message.text.split(" (")[0]
     tag_to_search = "no_tag" if raw_tag_text == "Без тега" else raw_tag_text
     records = await get_messages_by_tag(message.from_user.id, tag_to_search)
-    
     if not records:
         await message.answer(f"📭 Записи с тегом '{raw_tag_text}' не найдены.", reply_markup=get_main_keyboard())
         await state.clear()
         return
-
     await message.answer(f"🔍 Записи с тегом '<b>{html.escape(raw_tag_text)}</b>':", parse_mode="HTML")
     for record_id, text, name, timestamp in records:
         date_obj = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
         formatted_date = date_obj.strftime('%d.%m.%Y')
         safe_text = html.escape(str(text))
         safe_name = html.escape(str(name)) if name else "<i>(нет названия)</i>"
-        
-        # (ИЗМЕНЕНИЕ 2): Новый формат вывода для поиска по тегу
         response = (
             f"<b>Название:</b> {safe_name}\n"
             f"<b>Ссылка:</b> {safe_text}\n"
             f"<b>Дата:</b> {formatted_date}"
         )
-        
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🗑 Удалить запись", callback_data=f"del_{record_id}")]])
         await message.answer(response, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True), reply_markup=keyboard)
-        
     await message.answer("Выберите следующее действие:", reply_markup=get_main_keyboard())
     await state.clear()
+
+
+# --- ОБРАБОТЧИКИ ДОПОЛНИТЕЛЬНОГО МЕНЮ ---
+
+@dp.message(F.text == "⚙️ Дополнительно")
+async def extra_menu_handler(message: types.Message):
+    if not await check_access(message): return
+    await message.answer(
+        "Дополнительные действия:",
+        reply_markup=get_extra_keyboard()
+    )
+
+@dp.message(F.text == "🔙 Назад")
+async def back_to_main_handler(message: types.Message):
+    if not await check_access(message): return
+    await message.answer(
+        "Главное меню:",
+        reply_markup=get_main_keyboard()
+    )
+
+@dp.message(F.text == "📤 Создать резервную копию")
+@dp.message(Command("backup"))
+async def backup_command_handler(message: types.Message):
+    if not await check_access(message): return
+    await message.answer("⏳ Начинаю процесс резервного копирования...", reply_markup=get_main_keyboard())
+    db_file_path = 'messages.db'
+    backup_file_name = f"backup_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.db"
+    try:
+        file_link = await asyncio.to_thread(upload_database_backup, db_file_path, backup_file_name)
+        if file_link:
+            await message.answer(
+                f"✅ Резервная копия успешно создана и загружена на Google Drive!",
+                disable_web_page_preview=True
+            )
+        else:
+            await message.answer("❌ Произошла ошибка во время загрузки резервной копии.")
+    except Exception as e:
+        logging.error(f"Backup process failed: {e}")
+        await message.answer("❌ Произошла критическая ошибка в процессе резервного копирования.")
+
+
+@dp.message(F.text == "📥 Восстановить из бекапа")
+async def restore_backup_start_handler(message: types.Message, state: FSMContext):
+    if not await check_access(message): return
+    confirm_kb = ReplyKeyboardMarkup(
+        keyboard=[
+            [types.KeyboardButton(text="ДА, Я ПОНИМАЮ РИСКИ")],
+            [types.KeyboardButton(text="Отмена")]
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer(
+        "⚠️ <b>ВНИМАНИЕ!</b>\n\n"
+        "Вы собираетесь заменить текущую базу данных последней резервной копией с Google Drive. "
+        "Все текущие данные будут **безвозвратно удалены**.\n\n"
+        "Это действие нельзя отменить. Вы уверены, что хотите продолжить?",
+        parse_mode="HTML",
+        reply_markup=confirm_kb
+    )
+    await state.set_state(UserState.waiting_for_restore_confirmation)
+
+
+@dp.message(UserState.waiting_for_restore_confirmation)
+async def process_restore_confirmation(message: types.Message, state: FSMContext):
+    if not await check_access(message): return
+    if message.text == "ДА, Я ПОНИМАЮ РИСКИ":
+        await message.answer("⏳ Начинаю скачивание последней резервной копии...", reply_markup=get_main_keyboard())
+        temp_db_path = 'messages.db.tmp'
+        try:
+            success = await asyncio.to_thread(download_latest_backup, temp_db_path)
+            if success:
+                os.replace(temp_db_path, 'messages.db')
+                await message.answer(
+                    "✅ База данных успешно восстановлена!\n\n"
+                    "❗️<b>Важно:</b> Пожалуйста, перезапустите бота (остановите и запустите его заново), "
+                    "чтобы изменения вступили в силу.",
+                    parse_mode="HTML"
+                )
+            else:
+                await message.answer("❌ Не удалось найти или скачать резервную копию с Google Drive.")
+        except Exception as e:
+            logging.error(f"Restore process failed: {e}")
+            await message.answer("❌ Произошла критическая ошибка в процессе восстановления.")
+        finally:
+            if os.path.exists(temp_db_path):
+                os.remove(temp_db_path)
+            await state.clear()
+    else:
+        await message.answer("Восстановление отменено.", reply_markup=get_main_keyboard())
+        await state.clear()
 
 
 @dp.message(F.text == "🗑 Удалить всё")
@@ -257,6 +344,7 @@ async def confirm_deletion_handler(message: types.Message, state: FSMContext):
         parse_mode="HTML", reply_markup=keyboard
     )
     await state.set_state(UserState.waiting_for_deletion_confirmation)
+
 
 # --- ОБРАБОТЧИКИ КОЛБЭКОВ ---
 @dp.callback_query(F.data == "ignore")
@@ -284,14 +372,12 @@ async def show_record_details_callback(callback_query: CallbackQuery):
     safe_name = html.escape(str(name)) if name else "<i>(нет названия)</i>"
     safe_tag = "Без тега" if tag == "no_tag" else html.escape(str(tag))
 
-    # (ИЗМЕНЕНИЕ 1): Новый формат вывода для детального просмотра
     response = (
         f"<b>Название:</b> {safe_name}\n"
         f"<b>Ссылка:</b> {safe_text}\n"
         f"<b>Тег:</b> {safe_tag}\n"
         f"<b>Дата:</b> {formatted_date}"
     )
-    
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🗑 Удалить эту запись", callback_data=f"del_{rec_id}")]
     ])
