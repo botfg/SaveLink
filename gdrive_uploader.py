@@ -1,5 +1,6 @@
 import os.path
 import io
+import logging
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -22,8 +23,12 @@ def get_drive_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
+            try:
+                flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+                creds = flow.run_local_server(port=0)
+            except FileNotFoundError:
+                logging.error("Файл credentials.json не найден. Убедитесь, что он находится в корневой папке проекта.")
+                return None
         # Сохраняем данные для следующего запуска
         with open('token.json', 'w') as token:
             token.write(creds.to_json())
@@ -32,28 +37,33 @@ def get_drive_service():
         service = build('drive', 'v3', credentials=creds)
         return service
     except HttpError as error:
-        print(f'An error occurred: {error}')
+        logging.error(f'Произошла ошибка при создании сервиса Google Drive: {error}')
         return None
 
 def find_or_create_backup_folder(service):
     """Находит или создает папку для бекапов и возвращает ее ID."""
-    folder_id = None
-    response = service.files().list(
-        q="name='TelegramBotBackups' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-        spaces='drive',
-        fields='files(id, name)'
-    ).execute()
-    
-    if not response['files']:
-        folder_metadata = {
-            'name': 'TelegramBotBackups',
-            'mimeType': 'application/vnd.google-apps.folder'
-        }
-        folder = service.files().create(body=folder_metadata, fields='id').execute()
-        folder_id = folder.get('id')
-    else:
-        folder_id = response['files'][0].get('id')
-    return folder_id
+    try:
+        folder_id = None
+        response = service.files().list(
+            q="name='TelegramBotBackups' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+            spaces='drive',
+            fields='files(id, name)'
+        ).execute()
+        
+        if not response.get('files', []):
+            logging.info("Папка 'TelegramBotBackups' не найдена, создаю новую.")
+            folder_metadata = {
+                'name': 'TelegramBotBackups',
+                'mimeType': 'application/vnd.google-apps.folder'
+            }
+            folder = service.files().create(body=folder_metadata, fields='id').execute()
+            folder_id = folder.get('id')
+        else:
+            folder_id = response['files'][0].get('id')
+        return folder_id
+    except HttpError as error:
+        logging.error(f"Ошибка при поиске или создании папки для бекапов: {error}")
+        return None
 
 def upload_database_backup(file_path, file_name):
     """Загружает файл на Google Drive и возвращает ссылку на него или None."""
@@ -64,14 +74,14 @@ def upload_database_backup(file_path, file_name):
     try:
         folder_id = find_or_create_backup_folder(service)
         if not folder_id:
-            print("Не удалось найти или создать папку для бекапов.")
             return None
 
         file_metadata = {
             'name': file_name,
             'parents': [folder_id]
         }
-        media = MediaFileUpload(file_path, mimetype='application/x-sqlite3')
+        # Указываем правильный mimetype для SQL/текстовых файлов
+        media = MediaFileUpload(file_path, mimetype='text/plain', resumable=True)
         
         file = service.files().create(
             body=file_metadata,
@@ -79,11 +89,11 @@ def upload_database_backup(file_path, file_name):
             fields='id, webViewLink'
         ).execute()
         
-        print(f"Файл '{file_name}' успешно загружен.")
+        logging.info(f"Файл '{file_name}' успешно загружен.")
         return file.get('webViewLink')
 
     except HttpError as error:
-        print(f'An error occurred during file upload: {error}')
+        logging.error(f'Произошла ошибка во время загрузки файла: {error}')
         return None
 
 def download_latest_backup(destination_path):
@@ -95,12 +105,11 @@ def download_latest_backup(destination_path):
     try:
         folder_id = find_or_create_backup_folder(service)
         if not folder_id:
-            print("Не удалось найти папку для бекапов.")
             return False
 
-        # Ищем последний файл .db в папке, сортируя по дате создания
+        # Ищем последний файл .sql или .db в папке, сортируя по дате создания
         response = service.files().list(
-            q=f"'{folder_id}' in parents and name contains '.db' and trashed=false",
+            q=f"'{folder_id}' in parents and (name contains '.db' or name contains '.sql') and trashed=false",
             orderBy='createdTime desc',
             pageSize=1,
             fields='files(id, name)'
@@ -108,13 +117,13 @@ def download_latest_backup(destination_path):
 
         files = response.get('files', [])
         if not files:
-            print("В папке не найдено файлов для восстановления.")
+            logging.warning("В папке на Google Drive не найдено файлов для восстановления.")
             return False
 
         latest_file = files[0]
         file_id = latest_file.get('id')
         file_name = latest_file.get('name')
-        print(f"Найден последний бекап: {file_name} (ID: {file_id})")
+        logging.info(f"Найден последний бекап: {file_name} (ID: {file_id})")
 
         request = service.files().get_media(fileId=file_id)
         fh = io.FileIO(destination_path, 'wb')
@@ -123,11 +132,11 @@ def download_latest_backup(destination_path):
         done = False
         while done is False:
             status, done = downloader.next_chunk()
-            print(f"Скачивание {int(status.progress() * 100)}%.")
+            logging.info(f"Скачивание {int(status.progress() * 100)}%.")
         
-        print(f"Файл '{file_name}' успешно скачан в '{destination_path}'.")
+        logging.info(f"Файл '{file_name}' успешно скачан в '{destination_path}'.")
         return True
 
     except HttpError as error:
-        print(f'An error occurred during file download: {error}')
+        logging.error(f'Произошла ошибка во время скачивания файла: {error}')
         return False

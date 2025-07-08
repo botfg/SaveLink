@@ -1,6 +1,6 @@
 aiogram>=3.0.0
 pydantic-settings
-aiosqlite
+asyncpg
 apscheduler
 google-api-python-client
 google-auth-httplib2

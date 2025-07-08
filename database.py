@@ -1,34 +1,37 @@
-import aiosqlite
+import asyncpg
 import logging
 from datetime import datetime
+from config_reader import config
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+# Глобальная переменная для хранения пула соединений
+pool = None
 
 async def init_db():
-    """Инициализирует базу данных и создает таблицы, если они не существуют."""
+    """Инициализирует пул соединений с PostgreSQL и создает таблицы."""
+    global pool
+    if pool:
+        return
+        
     try:
-        async with aiosqlite.connect('messages.db') as db:
-            await db.execute('''
+        pool = await asyncpg.create_pool(dsn=config.db_dsn)
+        async with pool.acquire() as connection:
+            await connection.execute('''
                 CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT NOT NULL,
                     message TEXT NOT NULL,
                     name TEXT,
                     tag TEXT DEFAULT 'no_tag',
-                    timestamp TEXT NOT NULL,
+                    timestamp TIMESTAMPTZ NOT NULL,
                     UNIQUE(user_id, message, tag)
                 )
             ''')
-            await db.execute('CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id)')
-            await db.execute('CREATE INDEX IF NOT EXISTS idx_messages_tag ON messages(tag)')
-            await db.commit()
-            logging.info("Database initialized successfully.")
-    except aiosqlite.Error as e:
-        logging.error(f"Database initialization failed: {e}")
+        logging.info("Пул соединений с PostgreSQL успешно создан и таблица проверена.")
+    except Exception as e:
+        logging.error(f"Не удалось инициализировать пул соединений с базой данных: {e}")
         raise
 
 async def validate_text(text: str) -> tuple[bool, str]:
-    """Валидация текста сообщения."""
     if not text or len(text) < 1:
         return False, "Текст не может быть пустым!"
     if len(text) > 4096:
@@ -36,131 +39,100 @@ async def validate_text(text: str) -> tuple[bool, str]:
     return True, ""
 
 async def validate_name(name: str) -> tuple[bool, str]:
-    """Валидация названия."""
     if name and len(name) > 1000:
         return False, "Название не должно превышать 1000 символов!"
     return True, ""
 
 async def validate_tag(tag: str) -> tuple[bool, str]:
-    """Валидация тега."""
     if not tag or len(tag.strip()) == 0:
         return False, "Тег не может быть пустым!"
     if len(tag) > 100:
         return False, "Тег не должен превышать 100 символов!"
     return True, ""
 
-async def save_message(user_id: int, message: str, tag: str = "no_tag", name: str = None, timestamp: str = None):
-    """Сохраняет новое сообщение в базу данных."""
+async def save_message(user_id: int, message: str, tag: str = "no_tag", name: str = None, timestamp: datetime = None):
+    ts = timestamp or datetime.now()
     try:
-        async with aiosqlite.connect('messages.db') as db:
-            ts = timestamp or datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            await db.execute(
-                'INSERT INTO messages (user_id, message, tag, name, timestamp) VALUES (?, ?, ?, ?, ?)',
-                (user_id, message, tag.strip(), name, ts)
+        async with pool.acquire() as connection:
+            await connection.execute(
+                'INSERT INTO messages (user_id, message, tag, name, timestamp) VALUES ($1, $2, $3, $4, $5)',
+                user_id, message, tag.strip(), name, ts
             )
-            await db.commit()
-            return True
-    except aiosqlite.IntegrityError:
-        logging.warning(f"Attempt to save a duplicate message for user {user_id}.")
+        return True
+    except asyncpg.UniqueViolationError:
+        logging.warning(f"Попытка сохранить дублирующуюся запись для пользователя {user_id}.")
         return False
-    except aiosqlite.Error as e:
-        logging.error(f"Failed to save message for user {user_id}: {e}")
+    except Exception as e:
+        logging.error(f"Не удалось сохранить сообщение для пользователя {user_id}: {e}")
         return False
 
 async def get_messages(user_id: int):
-    """Получает все сообщения пользователя, отсортированные по дате."""
     try:
-        async with aiosqlite.connect('messages.db') as db:
-            async with db.execute('SELECT id, message, tag, name, timestamp FROM messages WHERE user_id = ? ORDER BY timestamp DESC', (user_id,)) as cursor:
-                return await cursor.fetchall()
-    except aiosqlite.Error as e:
-        logging.error(f"Failed to get messages for user {user_id}: {e}")
+        async with pool.acquire() as connection:
+            rows = await connection.fetch('SELECT id, message, tag, name, timestamp FROM messages WHERE user_id = $1 ORDER BY timestamp DESC', user_id)
+            return rows
+    except Exception as e:
+        logging.error(f"Не удалось получить сообщения для пользователя {user_id}: {e}")
         return []
 
 async def get_message_by_id(user_id: int, message_id: int):
-    """Получает одно сообщение по его ID и ID пользователя."""
     try:
-        async with aiosqlite.connect('messages.db') as db:
-            async with db.execute(
-                'SELECT id, message, tag, name, timestamp FROM messages WHERE id = ? AND user_id = ?',
-                (message_id, user_id)
-            ) as cursor:
-                return await cursor.fetchone()
-    except aiosqlite.Error as e:
-        logging.error(f"Failed to get message by id {message_id} for user {user_id}: {e}")
+        async with pool.acquire() as connection:
+            row = await connection.fetchrow('SELECT id, message, tag, name, timestamp FROM messages WHERE id = $1 AND user_id = $2', message_id, user_id)
+            return row
+    except Exception as e:
+        logging.error(f"Не удалось получить сообщение по id {message_id} для пользователя {user_id}: {e}")
         return None
 
 async def get_tags(user_id: int):
-    """Получает все уникальные теги пользователя и количество записей для каждого."""
     try:
-        async with aiosqlite.connect('messages.db') as db:
-            async with db.execute('SELECT tag, COUNT(*) as count FROM messages WHERE user_id = ? GROUP BY tag ORDER BY tag', (user_id,)) as cursor:
-                return await cursor.fetchall()
-    except aiosqlite.Error as e:
-        logging.error(f"Failed to get tags for user {user_id}: {e}")
+        async with pool.acquire() as connection:
+            rows = await connection.fetch('SELECT tag, COUNT(*) as count FROM messages WHERE user_id = $1 GROUP BY tag ORDER BY tag', user_id)
+            return rows
+    except Exception as e:
+        logging.error(f"Не удалось получить теги для пользователя {user_id}: {e}")
         return []
 
 async def get_messages_by_tag(user_id: int, tag: str):
-    """Получает все сообщения пользователя по определенному тегу."""
     try:
-        async with aiosqlite.connect('messages.db') as db:
-            cursor = await db.execute("SELECT id, message, name, timestamp FROM messages WHERE user_id = ? AND tag = ? ORDER BY timestamp DESC", (user_id, tag))
-            return await cursor.fetchall()
-    except aiosqlite.Error as e:
-        logging.error(f"Failed to get messages by tag '{tag}' for user {user_id}: {e}")
+        async with pool.acquire() as connection:
+            rows = await connection.fetch("SELECT id, message, name, timestamp FROM messages WHERE user_id = $1 AND tag = $2 ORDER BY timestamp DESC", user_id, tag)
+            return rows
+    except Exception as e:
+        logging.error(f"Не удалось получить сообщения по тегу '{tag}' для пользователя {user_id}: {e}")
         return []
 
 async def delete_messages(user_id: int):
-    """Удаляет все сообщения пользователя."""
     try:
-        async with aiosqlite.connect('messages.db') as db:
-            await db.execute('DELETE FROM messages WHERE user_id = ?', (user_id,))
-            await db.commit()
-            logging.info(f"All messages deleted for user {user_id}.")
-            return True
-    except aiosqlite.Error as e:
-        logging.error(f"Failed to delete all messages for user {user_id}: {e}")
+        async with pool.acquire() as connection:
+            await connection.execute('DELETE FROM messages WHERE user_id = $1', user_id)
+        logging.info(f"Все сообщения удалены для пользователя {user_id}.")
+        return True
+    except Exception as e:
+        logging.error(f"Не удалось удалить все сообщения для пользователя {user_id}: {e}")
         return False
 
 async def delete_message_by_id(user_id: int, message_id: int):
-    """Удаляет одно сообщение по его ID."""
     try:
-        async with aiosqlite.connect('messages.db') as db:
-            await db.execute('DELETE FROM messages WHERE user_id = ? AND id = ?', (user_id, message_id))
-            await db.commit()
-            return True
-    except aiosqlite.Error as e:
-        logging.error(f"Failed to delete message by id {message_id} for user {user_id}: {e}")
+        async with pool.acquire() as connection:
+            await connection.execute('DELETE FROM messages WHERE user_id = $1 AND id = $2', user_id, message_id)
+        return True
+    except Exception as e:
+        logging.error(f"Не удалось удалить сообщение по id {message_id} для пользователя {user_id}: {e}")
         return False
 
-async def delete_message_by_id(user_id: int, message_id: int):
-    """Удаляет одно сообщение по его ID."""
-    try:
-        async with aiosqlite.connect('messages.db') as db:
-            await db.execute('DELETE FROM messages WHERE user_id = ? AND id = ?', (user_id, message_id))
-            await db.commit()
-            return True
-    except aiosqlite.Error as e:
-        logging.error(f"Failed to delete message by id {message_id} for user {user_id}: {e}")
-        return False
-
-# (ИЗМЕНЕНИЕ): Новая функция для обновления записи
 async def update_record_field(record_id: int, field: str, value: str):
-    """Обновляет определенное поле (name, message, tag) для записи."""
-    # Проверяем, что поле является одним из разрешенных, для безопасности
     allowed_fields = ["name", "message", "tag"]
     if field not in allowed_fields:
-        logging.error(f"Attempt to update a non-allowed field: {field}")
+        logging.error(f"Попытка обновить неразрешенное поле: {field}")
         return False
-        
     try:
-        async with aiosqlite.connect('messages.db') as db:
-            # Используем f-строку для подстановки имени столбца, так как плейсхолдеры (?) здесь не работают
-            query = f"UPDATE messages SET {field} = ? WHERE id = ?"
-            await db.execute(query, (value, record_id))
-            await db.commit()
-            logging.info(f"Record {record_id} field '{field}' was updated.")
-            return True
-    except aiosqlite.Error as e:
-        logging.error(f"Failed to update record {record_id}: {e}")
+        async with pool.acquire() as connection:
+            query = f"UPDATE messages SET {field} = $1 WHERE id = $2"
+            await connection.execute(query, value, record_id)
+        logging.info(f"Поле '{field}' записи {record_id} было обновлено.")
+        return True
+    except Exception as e:
+        logging.error(f"Не удалось обновить запись {record_id}: {e}")
         return False
+

@@ -3,6 +3,7 @@ import re
 import logging
 import html
 import os
+import subprocess
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types, F
@@ -137,7 +138,7 @@ async def process_tag_choice(message: types.Message, state: FSMContext):
         data = await state.get_data()
         save_result = await save_message(
             message.from_user.id, data.get("user_text"), "no_tag",
-            data.get("name"), datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            data.get("name"), datetime.now()
         )
         if save_result:
             await message.answer("✅ Сообщение сохранено без тега!", reply_markup=get_main_keyboard())
@@ -161,7 +162,7 @@ async def process_tag(message: types.Message, state: FSMContext):
     data = await state.get_data()
     save_result = await save_message(
         message.from_user.id, data.get("user_text"), tag_text.strip(),
-        data.get("name"), datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        data.get("name"), datetime.now()
     )
     if save_result:
         action_type = "новым" if data.get("creating_new_tag", False) else "существующим"
@@ -181,7 +182,7 @@ async def view_records_handler(message: types.Message):
 
     grouped_records = {}
     for record in records:
-        tag = record[2]
+        tag = record['tag']
         if tag not in grouped_records:
             grouped_records[tag] = []
         grouped_records[tag].append(record)
@@ -191,7 +192,9 @@ async def view_records_handler(message: types.Message):
         display_tag = "Без тега" if tag == "no_tag" else html.escape(tag)
         builder.row(InlineKeyboardButton(text=f"📌 {display_tag}", callback_data="ignore"))
         for r in recs:
-            record_id, record_text, _, record_name, _ = r
+            record_id = r['id']
+            record_text = r['message']
+            record_name = r['name']
             link_text_content = record_name if record_name else record_text
             link_text = (link_text_content[:40] + '...') if len(link_text_content) > 40 else link_text_content
             safe_link_text = html.escape(link_text)
@@ -230,21 +233,19 @@ async def process_tag_selection(message: types.Message, state: FSMContext):
         await state.clear()
         return
     await message.answer(f"🔍 Записи с тегом '<b>{html.escape(raw_tag_text)}</b>':", parse_mode="HTML")
-    for record_id, text, name, timestamp in records:
-        date_obj = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
-        formatted_date = date_obj.strftime('%d.%m.%Y')
-        safe_text = html.escape(str(text))
-        safe_name = html.escape(str(name)) if name else "<i>(нет названия)</i>"
+    for record in records:
+        formatted_date = record['timestamp'].strftime('%d.%m.%Y')
+        safe_text = html.escape(str(record['message']))
+        safe_name = html.escape(str(record['name'])) if record['name'] else "<i>(нет названия)</i>"
         response = (
             f"<b>Название:</b> {safe_name}\n"
             f"<b>Ссылка:</b> {safe_text}\n"
             f"<b>Дата:</b> {formatted_date}"
         )
         
-        # (ИЗМЕНЕНИЕ): Добавляем обе кнопки в результаты поиска
         builder = InlineKeyboardBuilder()
-        builder.button(text="✏️ Редактировать", callback_data=f"edit_record_{record_id}")
-        builder.button(text="🗑 Удалить", callback_data=f"del_{record_id}")
+        builder.button(text="✏️ Редактировать", callback_data=f"edit_record_{record['id']}")
+        builder.button(text="🗑 Удалить", callback_data=f"del_{record['id']}")
         builder.adjust(2)
         
         await message.answer(response, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True), reply_markup=builder.as_markup())
@@ -276,20 +277,50 @@ async def back_to_main_handler(message: types.Message):
 async def backup_command_handler(message: types.Message):
     if not await check_access(message): return
     await message.answer("⏳ Начинаю процесс резервного копирования...", reply_markup=get_main_keyboard())
-    db_file_path = 'messages.db'
-    backup_file_name = f"backup_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.db"
+    
+    backup_file_path = f"manual_backup_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.sql"
+
     try:
-        file_link = await asyncio.to_thread(upload_database_backup, db_file_path, backup_file_name)
+        dump_command = [
+            'pg_dump',
+            '--dbname', config.db_dsn,
+            '--file', backup_file_path,
+            '--format', 'plain',
+            '--clean'
+        ]
+
+        process = await asyncio.create_subprocess_exec(
+            *dump_command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+
+        if process.returncode != 0:
+            error_message = stderr.decode().strip()
+            logging.error(f"pg_dump завершился с ошибкой: {error_message}")
+            await message.answer(f"❌ Ошибка при создании дампа базы данных: {error_message}")
+            return
+
+        file_link = await asyncio.to_thread(upload_database_backup, backup_file_path, os.path.basename(backup_file_path))
+
         if file_link:
             await message.answer(
                 f"✅ Резервная копия успешно создана и загружена на Google Drive!",
                 disable_web_page_preview=True
             )
         else:
-            await message.answer("❌ Произошла ошибка во время загрузки резервной копии.")
+            await message.answer("❌ Произошла ошибка во время загрузки резервной копии на Google Drive.")
+
+    except FileNotFoundError:
+        logging.error("Команда 'pg_dump' не найдена. Убедитесь, что postgresql-client установлен.")
+        await message.answer("❌ Ошибка: команда `pg_dump` не найдена. Установите `postgresql-client`.")
     except Exception as e:
-        logging.error(f"Backup process failed: {e}")
+        logging.error(f"Manual backup process failed: {e}")
         await message.answer("❌ Произошла критическая ошибка в процессе резервного копирования.")
+    finally:
+        if os.path.exists(backup_file_path):
+            os.remove(backup_file_path)
 
 
 @dp.message(F.text == "📥 Восстановить из бекапа")
@@ -319,26 +350,54 @@ async def process_restore_confirmation(message: types.Message, state: FSMContext
     if not await check_access(message): return
     if message.text == "ДА, Я ПОНИМАЮ РИСКИ":
         await message.answer("⏳ Начинаю скачивание последней резервной копии...", reply_markup=get_main_keyboard())
-        temp_db_path = 'messages.db.tmp'
+        
+        temp_backup_path = f"restore_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.sql"
+        
         try:
-            success = await asyncio.to_thread(download_latest_backup, temp_db_path)
-            if success:
-                os.replace(temp_db_path, 'messages.db')
+            success = await asyncio.to_thread(download_latest_backup, temp_backup_path)
+            
+            if not success:
+                await message.answer("❌ Не удалось найти или скачать резервную копию с Google Drive.")
+                return
+
+            await message.answer("✅ Бекап скачан. Начинаю восстановление базы данных...")
+
+            restore_command = [
+                'psql',
+                '--dbname', config.db_dsn,
+                '-f', temp_backup_path
+            ]
+
+            process = await asyncio.create_subprocess_exec(
+                *restore_command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+
+            if process.returncode != 0:
+                error_message = stderr.decode().strip()
+                logging.error(f"psql завершился с ошибкой: {error_message}")
+                await message.answer(f"❌ Ошибка при восстановлении из дампа: {error_message}")
+            else:
                 await message.answer(
-                    "✅ База данных успешно восстановлена!\n\n"
+                    "✅ База данных успешно восстановлена из резервной копии!\n\n"
                     "❗️<b>Важно:</b> Пожалуйста, перезапустите бота (остановите и запустите его заново), "
-                    "чтобы изменения вступили в силу.",
+                    "чтобы он начал работать с обновленными данными.",
                     parse_mode="HTML"
                 )
-            else:
-                await message.answer("❌ Не удалось найти или скачать резервную копию с Google Drive.")
+
+        except FileNotFoundError:
+            logging.error("Команда 'psql' не найдена. Убедитесь, что postgresql-client установлен.")
+            await message.answer("❌ Ошибка: команда `psql` не найдена. Установите `postgresql-client`.")
         except Exception as e:
             logging.error(f"Restore process failed: {e}")
             await message.answer("❌ Произошла критическая ошибка в процессе восстановления.")
         finally:
-            if os.path.exists(temp_db_path):
-                os.remove(temp_db_path)
+            if os.path.exists(temp_backup_path):
+                os.remove(temp_backup_path)
             await state.clear()
+            
     else:
         await message.answer("Восстановление отменено.", reply_markup=get_main_keyboard())
         await state.clear()
@@ -374,12 +433,10 @@ async def show_record_details_callback(callback_query: CallbackQuery):
         await callback_query.answer("❌ Запись не найдена.", show_alert=True)
         return
 
-    rec_id, text, tag, name, timestamp = record
-    date_obj = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
-    formatted_date = date_obj.strftime('%d.%m.%Y %H:%M')
-    safe_text = html.escape(str(text))
-    safe_name = html.escape(str(name)) if name else "<i>(нет названия)</i>"
-    safe_tag = "Без тега" if tag == "no_tag" else html.escape(str(tag))
+    formatted_date = record['timestamp'].strftime('%d.%m.%Y %H:%M')
+    safe_text = html.escape(str(record['message']))
+    safe_name = html.escape(str(record['name'])) if record['name'] else "<i>(нет названия)</i>"
+    safe_tag = "Без тега" if record['tag'] == "no_tag" else html.escape(str(record['tag']))
 
     response = (
         f"<b>Название:</b> {safe_name}\n"
@@ -389,8 +446,8 @@ async def show_record_details_callback(callback_query: CallbackQuery):
     )
     
     builder = InlineKeyboardBuilder()
-    builder.button(text="✏️ Редактировать", callback_data=f"edit_record_{rec_id}")
-    builder.button(text="🗑 Удалить", callback_data=f"del_{rec_id}")
+    builder.button(text="✏️ Редактировать", callback_data=f"edit_record_{record['id']}")
+    builder.button(text="🗑 Удалить", callback_data=f"del_{record['id']}")
     builder.adjust(2)
 
     await callback_query.message.answer(response, parse_mode="HTML", reply_markup=builder.as_markup(), disable_web_page_preview=True)
@@ -443,9 +500,9 @@ async def edit_tag_callback(callback_query: CallbackQuery, state: FSMContext):
     tags = await get_tags(callback_query.from_user.id)
     kb = [[types.KeyboardButton(text="Создать новый тег")]]
     if tags:
-        for tag, count in tags:
-            if tag != "no_tag":
-                kb.append([types.KeyboardButton(text=f"{tag} ({count})")])
+        for tag in tags:
+            if tag['tag'] != "no_tag":
+                kb.append([types.KeyboardButton(text=f"{tag['tag']} ({tag['count']})")])
     kb.append([types.KeyboardButton(text="❌ Отменить")])
     keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
     await callback_query.message.answer("Выберите новый тег или создайте его:", reply_markup=keyboard)
@@ -606,4 +663,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
