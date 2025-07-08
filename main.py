@@ -28,6 +28,7 @@ from keyboards import (
 )
 from states import UserState
 from gdrive_uploader import upload_database_backup, download_latest_backup
+from scheduler import setup_scheduler
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -474,6 +475,7 @@ async def handle_other_messages(message: types.Message, state: FSMContext):
 async def main():
     try:
         await init_db()
+        setup_scheduler(bot, ALLOWED_USER_ID)
         await dp.start_polling(bot)
     except Exception as e:
         logging.critical(f"Критическая ошибка при запуске бота: {e}")
