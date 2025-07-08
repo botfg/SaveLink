@@ -19,7 +19,8 @@ from config_reader import config
 from database import (
     init_db, save_message, get_messages, get_tags,
     get_messages_by_tag, delete_messages, delete_message_by_id,
-    validate_text, validate_name, validate_tag, get_message_by_id
+    validate_text, validate_name, validate_tag, get_message_by_id,
+    update_record_field
 )
 from keyboards import (
     get_main_keyboard, get_extra_keyboard, get_tag_choice_keyboard,
@@ -239,8 +240,15 @@ async def process_tag_selection(message: types.Message, state: FSMContext):
             f"<b>Ссылка:</b> {safe_text}\n"
             f"<b>Дата:</b> {formatted_date}"
         )
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🗑 Удалить запись", callback_data=f"del_{record_id}")]])
-        await message.answer(response, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True), reply_markup=keyboard)
+        
+        # (ИЗМЕНЕНИЕ): Добавляем обе кнопки в результаты поиска
+        builder = InlineKeyboardBuilder()
+        builder.button(text="✏️ Редактировать", callback_data=f"edit_record_{record_id}")
+        builder.button(text="🗑 Удалить", callback_data=f"del_{record_id}")
+        builder.adjust(2)
+        
+        await message.answer(response, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True), reply_markup=builder.as_markup())
+        
     await message.answer("Выберите следующее действие:", reply_markup=get_main_keyboard())
     await state.clear()
 
@@ -379,11 +387,124 @@ async def show_record_details_callback(callback_query: CallbackQuery):
         f"<b>Тег:</b> {safe_tag}\n"
         f"<b>Дата:</b> {formatted_date}"
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗑 Удалить эту запись", callback_data=f"del_{rec_id}")]
-    ])
-    await callback_query.message.answer(response, parse_mode="HTML", reply_markup=keyboard, disable_web_page_preview=True)
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✏️ Редактировать", callback_data=f"edit_record_{rec_id}")
+    builder.button(text="🗑 Удалить", callback_data=f"del_{rec_id}")
+    builder.adjust(2)
+
+    await callback_query.message.answer(response, parse_mode="HTML", reply_markup=builder.as_markup(), disable_web_page_preview=True)
     await callback_query.answer()
+
+@dp.callback_query(F.data.startswith("edit_record_"))
+async def edit_record_menu_callback(callback_query: CallbackQuery):
+    record_id = int(callback_query.data.split("_")[2])
+    
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Изменить название", callback_data=f"edit_name_{record_id}")
+    builder.button(text="Изменить ссылку", callback_data=f"edit_link_{record_id}")
+    builder.button(text="Изменить тег", callback_data=f"edit_tag_{record_id}")
+    builder.button(text="🔙 Закрыть меню", callback_data=f"close_edit_menu")
+    builder.adjust(1)
+
+    await callback_query.message.answer(
+        "Выберите, что вы хотите изменить:",
+        reply_markup=builder.as_markup()
+    )
+    await callback_query.answer()
+
+@dp.callback_query(F.data == "close_edit_menu")
+async def close_edit_menu_callback(callback_query: CallbackQuery):
+    await callback_query.message.delete()
+    await callback_query.answer()
+
+
+@dp.callback_query(F.data.startswith("edit_name_"))
+async def edit_name_callback(callback_query: CallbackQuery, state: FSMContext):
+    record_id = int(callback_query.data.split("_")[2])
+    await state.update_data(record_id_to_edit=record_id)
+    await state.set_state(UserState.editing_record_name)
+    await callback_query.message.edit_text("Введите новое название для записи:")
+    await callback_query.answer()
+
+@dp.callback_query(F.data.startswith("edit_link_"))
+async def edit_link_callback(callback_query: CallbackQuery, state: FSMContext):
+    record_id = int(callback_query.data.split("_")[2])
+    await state.update_data(record_id_to_edit=record_id)
+    await state.set_state(UserState.editing_record_link)
+    await callback_query.message.edit_text("Введите новую ссылку для записи:")
+    await callback_query.answer()
+
+@dp.callback_query(F.data.startswith("edit_tag_"))
+async def edit_tag_callback(callback_query: CallbackQuery, state: FSMContext):
+    record_id = int(callback_query.data.split("_")[2])
+    await state.update_data(record_id_to_edit=record_id)
+    await state.set_state(UserState.editing_record_tag)
+    tags = await get_tags(callback_query.from_user.id)
+    kb = [[types.KeyboardButton(text="Создать новый тег")]]
+    if tags:
+        for tag, count in tags:
+            if tag != "no_tag":
+                kb.append([types.KeyboardButton(text=f"{tag} ({count})")])
+    kb.append([types.KeyboardButton(text="❌ Отменить")])
+    keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+    await callback_query.message.answer("Выберите новый тег или создайте его:", reply_markup=keyboard)
+    await callback_query.message.delete()
+    await callback_query.answer()
+
+@dp.message(UserState.editing_record_name)
+async def process_new_name(message: types.Message, state: FSMContext):
+    is_valid, error_message = await validate_name(message.text)
+    if not is_valid:
+        await message.answer(f"❌ Ошибка: {error_message}\n\nПопробуйте еще раз или отмените действие.")
+        return
+    
+    data = await state.get_data()
+    record_id = data.get("record_id_to_edit")
+    
+    if await update_record_field(record_id, "name", message.text.strip()):
+        await message.answer("✅ Название успешно обновлено!", reply_markup=get_main_keyboard())
+    else:
+        await message.answer("❌ Не удалось обновить название. Попробуйте позже.", reply_markup=get_main_keyboard())
+    await state.clear()
+
+@dp.message(UserState.editing_record_link)
+async def process_new_link(message: types.Message, state: FSMContext):
+    is_valid, error_message = await validate_text(message.text)
+    if not is_valid:
+        await message.answer(f"❌ Ошибка: {error_message}\n\nПопробуйте еще раз или отмените действие.")
+        return
+    
+    data = await state.get_data()
+    record_id = data.get("record_id_to_edit")
+    
+    if await update_record_field(record_id, "message", message.text.strip()):
+        await message.answer("✅ Ссылка успешно обновлена!", reply_markup=get_main_keyboard())
+    else:
+        await message.answer("❌ Не удалось обновить ссылку. Попробуйте позже.", reply_markup=get_main_keyboard())
+    await state.clear()
+
+@dp.message(UserState.editing_record_tag)
+async def process_new_tag(message: types.Message, state: FSMContext):
+    tag_text = message.text.split(" (")[0]
+    if tag_text == "Создать новый тег":
+        await message.answer("Введите новый тег:", reply_markup=get_cancel_keyboard())
+        return
+
+    is_valid, error_message = await validate_tag(tag_text)
+    if not is_valid:
+        await message.answer(f"❌ Ошибка: {error_message}\n\nПопробуйте еще раз или отмените действие.")
+        return
+        
+    data = await state.get_data()
+    record_id = data.get("record_id_to_edit")
+    
+    if await update_record_field(record_id, "tag", tag_text.strip()):
+        await message.answer("✅ Тег успешно обновлен!", reply_markup=get_main_keyboard())
+    else:
+        await message.answer("❌ Не удалось обновить тег. Попробуйте позже.", reply_markup=get_main_keyboard())
+    await state.clear()
+
 
 @dp.callback_query(F.data == "save_url")
 async def process_save_url_callback(callback_query: CallbackQuery, state: FSMContext):
@@ -430,8 +551,11 @@ async def cancel_delete_callback(callback_query: CallbackQuery):
     if not await check_access(callback_query): return
     original_html_text = callback_query.message.html_text.split("\n\n❓")[0]
     record_id = int(callback_query.data.split('_')[2])
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🗑 Удалить запись", callback_data=f"del_{record_id}")]])
-    await callback_query.message.edit_text(original_html_text, parse_mode="HTML", reply_markup=keyboard)
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✏️ Редактировать", callback_data=f"edit_record_{record_id}")
+    builder.button(text="🗑 Удалить", callback_data=f"del_{record_id}")
+    builder.adjust(2)
+    await callback_query.message.edit_text(original_html_text, parse_mode="HTML", reply_markup=builder.as_markup())
     await callback_query.answer("Удаление отменено.")
 
 @dp.message(UserState.waiting_for_deletion_confirmation)
@@ -482,3 +606,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+

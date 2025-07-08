@@ -132,3 +132,35 @@ async def delete_message_by_id(user_id: int, message_id: int):
     except aiosqlite.Error as e:
         logging.error(f"Failed to delete message by id {message_id} for user {user_id}: {e}")
         return False
+
+async def delete_message_by_id(user_id: int, message_id: int):
+    """Удаляет одно сообщение по его ID."""
+    try:
+        async with aiosqlite.connect('messages.db') as db:
+            await db.execute('DELETE FROM messages WHERE user_id = ? AND id = ?', (user_id, message_id))
+            await db.commit()
+            return True
+    except aiosqlite.Error as e:
+        logging.error(f"Failed to delete message by id {message_id} for user {user_id}: {e}")
+        return False
+
+# (ИЗМЕНЕНИЕ): Новая функция для обновления записи
+async def update_record_field(record_id: int, field: str, value: str):
+    """Обновляет определенное поле (name, message, tag) для записи."""
+    # Проверяем, что поле является одним из разрешенных, для безопасности
+    allowed_fields = ["name", "message", "tag"]
+    if field not in allowed_fields:
+        logging.error(f"Attempt to update a non-allowed field: {field}")
+        return False
+        
+    try:
+        async with aiosqlite.connect('messages.db') as db:
+            # Используем f-строку для подстановки имени столбца, так как плейсхолдеры (?) здесь не работают
+            query = f"UPDATE messages SET {field} = ? WHERE id = ?"
+            await db.execute(query, (value, record_id))
+            await db.commit()
+            logging.info(f"Record {record_id} field '{field}' was updated.")
+            return True
+    except aiosqlite.Error as e:
+        logging.error(f"Failed to update record {record_id}: {e}")
+        return False
