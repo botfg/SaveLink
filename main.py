@@ -1,7 +1,7 @@
 import asyncio
 import re
 import logging
-import html # <-- Добавлен импорт для экранирования HTML
+import html
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types, F
@@ -9,6 +9,7 @@ from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery, LinkPreviewOptions, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup
 )
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 
@@ -16,7 +17,7 @@ from config_reader import config
 from database import (
     init_db, save_message, get_messages, get_tags,
     get_messages_by_tag, delete_messages, delete_message_by_id,
-    validate_text, validate_description, validate_tag
+    validate_text, validate_name, validate_tag, get_message_by_id
 )
 from keyboards import (
     get_main_keyboard, get_tag_choice_keyboard,
@@ -59,25 +60,17 @@ async def check_access(message: types.Message | types.CallbackQuery) -> bool:
 
 @dp.message(lambda message: is_url(message.text))
 async def handle_url(message: types.Message, state: FSMContext):
-    if not await check_access(message):
-        return
-
+    if not await check_access(message): return
     await state.update_data(temp_url=message.text)
-
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Да", callback_data="save_url"),
-            InlineKeyboardButton(text="❌ Нет", callback_data="cancel_url")
-        ]
+        [InlineKeyboardButton(text="✅ Да", callback_data="save_url"), InlineKeyboardButton(text="❌ Нет", callback_data="cancel_url")]
     ])
-
     await message.answer("Создать запись с данной ссылкой?", reply_markup=keyboard)
 
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    if not await check_access(message):
-        return
+    if not await check_access(message): return
     await state.clear()
     await message.answer(
         "👋 Привет! Я бот для сохранения заметок. Выберите действие:",
@@ -91,41 +84,32 @@ async def cancel_action(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state is not None:
         await state.clear()
-
-    await message.answer(
-        "Действие отменено. Выберите действие:",
-        reply_markup=get_main_keyboard()
-    )
+    await message.answer("Действие отменено. Выберите действие:", reply_markup=get_main_keyboard())
 
 # --- FSM для создания новой записи ---
 
 @dp.message(UserState.waiting_for_text)
 async def process_text(message: types.Message, state: FSMContext):
     if not await check_access(message): return
-
     is_valid, error_message = await validate_text(message.text)
     if not is_valid:
         await message.answer(f"❌ Ошибка: {error_message}", reply_markup=get_cancel_keyboard())
         return
-
     await state.update_data(user_text=message.text.strip())
-    await message.answer("Введите описание для записи\n(или нажмите «⏩ Пропустить»):", reply_markup=get_skip_keyboard())
-    await state.set_state(UserState.waiting_for_description)
+    await message.answer("Введите название для записи\n(или нажмите «⏩ Пропустить»):", reply_markup=get_skip_keyboard())
+    await state.set_state(UserState.waiting_for_name)
 
-
-@dp.message(UserState.waiting_for_description)
-async def process_description(message: types.Message, state: FSMContext):
+@dp.message(UserState.waiting_for_name)
+async def process_name(message: types.Message, state: FSMContext):
     if not await check_access(message): return
-
     if message.text == "⏩ Пропустить":
-        await state.update_data(description=None)
+        await state.update_data(name=None)
     else:
-        is_valid, error_message = await validate_description(message.text)
+        is_valid, error_message = await validate_name(message.text)
         if not is_valid:
             await message.answer(f"❌ Ошибка: {error_message}", reply_markup=get_skip_keyboard())
             return
-        await state.update_data(description=message.text.strip())
-
+        await state.update_data(name=message.text.strip())
     await message.answer("Добавить тег?", reply_markup=get_tag_choice_keyboard())
     await state.set_state(UserState.waiting_for_tag_choice)
 
@@ -133,26 +117,22 @@ async def process_description(message: types.Message, state: FSMContext):
 @dp.message(UserState.waiting_for_tag_choice)
 async def process_tag_choice(message: types.Message, state: FSMContext):
     if not await check_access(message): return
-
     if message.text.lower() == "да":
         tags = await get_tags(message.from_user.id)
         kb = [[types.KeyboardButton(text="Создать новый тег")]]
         if tags:
-            kb.extend([[types.KeyboardButton(text=tag[0])] for tag, count in tags if tag[0] != "no_tag"])
+            for tag, count in tags:
+                if tag != "no_tag":
+                    kb.append([types.KeyboardButton(text=f"{tag} ({count})")])
         kb.append([types.KeyboardButton(text="❌ Отменить")])
         keyboard = types.ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
-
         await message.answer("Выберите существующий тег или создайте новый:", reply_markup=keyboard)
         await state.set_state(UserState.waiting_for_tag)
-
     elif message.text.lower() == "нет":
         data = await state.get_data()
         save_result = await save_message(
-            message.from_user.id,
-            data.get("user_text"),
-            "no_tag",
-            data.get("description"),
-            datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            message.from_user.id, data.get("user_text"), "no_tag",
+            data.get("name"), datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         )
         if save_result:
             await message.answer("✅ Сообщение сохранено без тега!", reply_markup=get_main_keyboard())
@@ -164,26 +144,20 @@ async def process_tag_choice(message: types.Message, state: FSMContext):
 @dp.message(UserState.waiting_for_tag)
 async def process_tag(message: types.Message, state: FSMContext):
     if not await check_access(message): return
-
-    if message.text == "Создать новый тег":
+    tag_text = message.text.split(" (")[0]
+    if tag_text == "Создать новый тег":
         await message.answer("Введите новый тег:", reply_markup=get_cancel_keyboard())
         await state.update_data(creating_new_tag=True)
         return
-
-    is_valid, error_message = await validate_tag(message.text)
+    is_valid, error_message = await validate_tag(tag_text)
     if not is_valid:
         await message.answer(f"❌ Ошибка: {error_message}", reply_markup=get_cancel_keyboard())
         return
-
     data = await state.get_data()
     save_result = await save_message(
-        message.from_user.id,
-        data.get("user_text"),
-        message.text.strip(),
-        data.get("description"),
-        datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        message.from_user.id, data.get("user_text"), tag_text.strip(),
+        data.get("name"), datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     )
-
     if save_result:
         action_type = "новым" if data.get("creating_new_tag", False) else "существующим"
         await message.answer(f"✅ Сообщение успешно сохранено с {action_type} тегом!", reply_markup=get_main_keyboard())
@@ -191,49 +165,47 @@ async def process_tag(message: types.Message, state: FSMContext):
         await message.answer("❌ Такая запись уже существует!", reply_markup=get_main_keyboard())
     await state.clear()
 
-
-# --- Обработчики главного меню ---
-
+# --- ОБРАБОТЧИКИ ГЛАВНОГО МЕНЮ ---
 @dp.message(F.text == "📋 Просмотреть записи")
 async def view_records_handler(message: types.Message):
     if not await check_access(message): return
-
     records = await get_messages(message.from_user.id)
     if not records:
         await message.answer("📭 У вас пока нет сохраненных записей.", reply_markup=get_main_keyboard())
         return
 
-    for record_id, text, tag, description, timestamp in records:
-        date_obj = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
-        formatted_date = date_obj.strftime('%d.%m.%Y')
+    grouped_records = {}
+    for record in records:
+        tag = record[2]
+        if tag not in grouped_records:
+            grouped_records[tag] = []
+        grouped_records[tag].append(record)
 
-        # Экранируем пользовательские данные
-        safe_text = html.escape(str(text))
-        safe_description = html.escape(str(description)) if description else None
-        safe_tag = html.escape(str(tag))
+    builder = InlineKeyboardBuilder()
+    for tag, recs in sorted(grouped_records.items()):
+        display_tag = "Без тега" if tag == "no_tag" else html.escape(tag)
+        builder.row(InlineKeyboardButton(text=f"📌 {display_tag}", callback_data="ignore"))
+        for r in recs:
+            record_id, record_text, _, record_name, _ = r
+            link_text_content = record_name if record_name else record_text
+            link_text = (link_text_content[:40] + '...') if len(link_text_content) > 40 else link_text_content
+            safe_link_text = html.escape(link_text)
+            builder.row(InlineKeyboardButton(
+                text=f"• {safe_link_text}",
+                callback_data=f"view_record_{record_id}"
+            ))
 
-        # Используем HTML-теги для форматирования
-        response = f"📝 <b>Текст:</b> {safe_text}\n"
-        if safe_description:
-            response += f"📋 <b>Описание:</b> {safe_description}\n"
-        response += f"🏷 <b>Тег:</b> {safe_tag}\n⏰ <b>Время:</b> {formatted_date}"
-
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🗑 Удалить запись", callback_data=f"del_{record_id}")]])
-        # Отправляем с parse_mode="HTML"
-        await message.answer(response, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True), reply_markup=keyboard)
+    await message.answer("🗂️ Ваши записи:", reply_markup=builder.as_markup())
 
 
 @dp.message(F.text == "🔍 Поиск по тегу")
 async def search_by_tag_handler(message: types.Message, state: FSMContext):
     if not await check_access(message): return
-
     tags = await get_tags(message.from_user.id)
     keyboard = create_tags_keyboard(tags)
-
     if not keyboard:
         await message.answer("📭 У вас пока нет сохраненных тегов.", reply_markup=get_main_keyboard())
         return
-
     await message.answer("Выберите тег для поиска:", reply_markup=keyboard)
     await state.set_state(UserState.waiting_for_tag_selection)
 
@@ -241,37 +213,37 @@ async def search_by_tag_handler(message: types.Message, state: FSMContext):
 @dp.message(UserState.waiting_for_tag_selection)
 async def process_tag_selection(message: types.Message, state: FSMContext):
     if not await check_access(message): return
-
     if message.text == "❌ Отменить":
         await message.answer("Поиск отменен.", reply_markup=get_main_keyboard())
         await state.clear()
         return
-
-    tag = message.text.split(" (")[0]
-    records = await get_messages_by_tag(message.from_user.id, tag)
+        
+    raw_tag_text = message.text.split(" (")[0]
+    tag_to_search = "no_tag" if raw_tag_text == "Без тега" else raw_tag_text
+    records = await get_messages_by_tag(message.from_user.id, tag_to_search)
+    
     if not records:
-        await message.answer(f"📭 Записи с тегом '{tag}' не найдены.", reply_markup=get_main_keyboard())
+        await message.answer(f"📭 Записи с тегом '{raw_tag_text}' не найдены.", reply_markup=get_main_keyboard())
         await state.clear()
         return
 
-    await message.answer(f"🔍 Записи с тегом '<b>{html.escape(tag)}</b>':", parse_mode="HTML")
-    for record_id, text, description, timestamp in records:
+    await message.answer(f"🔍 Записи с тегом '<b>{html.escape(raw_tag_text)}</b>':", parse_mode="HTML")
+    for record_id, text, name, timestamp in records:
         date_obj = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
         formatted_date = date_obj.strftime('%d.%m.%Y')
-
-        # Экранируем пользовательские данные
         safe_text = html.escape(str(text))
-        safe_description = html.escape(str(description)) if description else None
+        safe_name = html.escape(str(name)) if name else "<i>(нет названия)</i>"
         
-        # Используем HTML-теги
-        response = f"📝 <b>Текст:</b> {safe_text}\n"
-        if safe_description:
-            response += f"📋 <b>Описание:</b> {safe_description}\n"
-        response += f"⏰ <b>Время:</b> {formatted_date}"
-
+        # (ИЗМЕНЕНИЕ 2): Новый формат вывода для поиска по тегу
+        response = (
+            f"<b>Название:</b> {safe_name}\n"
+            f"<b>Ссылка:</b> {safe_text}\n"
+            f"<b>Дата:</b> {formatted_date}"
+        )
+        
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🗑 Удалить запись", callback_data=f"del_{record_id}")]])
         await message.answer(response, parse_mode="HTML", link_preview_options=LinkPreviewOptions(is_disabled=True), reply_markup=keyboard)
-
+        
     await message.answer("Выберите следующее действие:", reply_markup=get_main_keyboard())
     await state.clear()
 
@@ -286,43 +258,75 @@ async def confirm_deletion_handler(message: types.Message, state: FSMContext):
     )
     await state.set_state(UserState.waiting_for_deletion_confirmation)
 
+# --- ОБРАБОТЧИКИ КОЛБЭКОВ ---
+@dp.callback_query(F.data == "ignore")
+async def ignore_callback(callback_query: CallbackQuery):
+    await callback_query.answer()
 
-# --- Обработчики колбэков (удаление, сохранение URL) ---
+@dp.callback_query(F.data.startswith("view_record_"))
+async def show_record_details_callback(callback_query: CallbackQuery):
+    if not await check_access(callback_query): return
+    try:
+        record_id = int(callback_query.data.split("_")[2])
+    except (IndexError, ValueError):
+        await callback_query.answer("❌ Ошибка ID записи.", show_alert=True)
+        return
+
+    record = await get_message_by_id(callback_query.from_user.id, record_id)
+    if not record:
+        await callback_query.answer("❌ Запись не найдена.", show_alert=True)
+        return
+
+    rec_id, text, tag, name, timestamp = record
+    date_obj = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+    formatted_date = date_obj.strftime('%d.%m.%Y %H:%M')
+    safe_text = html.escape(str(text))
+    safe_name = html.escape(str(name)) if name else "<i>(нет названия)</i>"
+    safe_tag = "Без тега" if tag == "no_tag" else html.escape(str(tag))
+
+    # (ИЗМЕНЕНИЕ 1): Новый формат вывода для детального просмотра
+    response = (
+        f"<b>Название:</b> {safe_name}\n"
+        f"<b>Ссылка:</b> {safe_text}\n"
+        f"<b>Тег:</b> {safe_tag}\n"
+        f"<b>Дата:</b> {formatted_date}"
+    )
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Удалить эту запись", callback_data=f"del_{rec_id}")]
+    ])
+    await callback_query.message.answer(response, parse_mode="HTML", reply_markup=keyboard, disable_web_page_preview=True)
+    await callback_query.answer()
 
 @dp.callback_query(F.data == "save_url")
 async def process_save_url_callback(callback_query: CallbackQuery, state: FSMContext):
     if not await check_access(callback_query): return
-
     data = await state.get_data()
     url = data.get("temp_url")
     if url:
         await state.update_data(user_text=url)
-        await callback_query.message.edit_text("Ссылка будет сохранена. Введите описание или нажмите 'Пропустить'.")
-        await callback_query.message.answer("Введите описание для ссылки:", reply_markup=get_skip_keyboard())
-        await state.set_state(UserState.waiting_for_description)
+        await callback_query.message.edit_text("Ссылка будет сохранена. Введите название или нажмите 'Пропустить'.")
+        await callback_query.message.answer("Введите название для ссылки:", reply_markup=get_skip_keyboard())
+        await state.set_state(UserState.waiting_for_name)
     else:
         await callback_query.message.edit_text("Не удалось сохранить ссылку. Попробуйте снова.")
     await callback_query.answer()
-
 
 @dp.callback_query(F.data == "cancel_url")
 async def process_cancel_url_callback(callback_query: CallbackQuery):
     await callback_query.message.edit_text("Сохранение ссылки отменено.")
     await callback_query.answer()
 
-
 @dp.callback_query(F.data.startswith('del_'))
 async def process_delete_callback(callback_query: CallbackQuery):
     if not await check_access(callback_query): return
     record_id = int(callback_query.data.split('_')[1])
     keyboard = get_delete_confirmation_keyboard(record_id)
-    # Используем html_text для безопасного редактирования
     await callback_query.message.edit_text(
         callback_query.message.html_text + "\n\n❓ <b>Вы уверены, что хотите удалить эту запись?</b>",
         parse_mode="HTML", reply_markup=keyboard
     )
     await callback_query.answer()
-
 
 @dp.callback_query(F.data.startswith('confirm_del_'))
 async def confirm_delete_callback(callback_query: CallbackQuery):
@@ -334,24 +338,18 @@ async def confirm_delete_callback(callback_query: CallbackQuery):
     else:
         await callback_query.answer("❌ Не удалось удалить запись.", show_alert=True)
 
-
 @dp.callback_query(F.data.startswith('cancel_del_'))
 async def cancel_delete_callback(callback_query: CallbackQuery):
     if not await check_access(callback_query): return
-    # Используем html_text для безопасного восстановления
     original_html_text = callback_query.message.html_text.split("\n\n❓")[0]
     record_id = int(callback_query.data.split('_')[2])
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🗑 Удалить запись", callback_data=f"del_{record_id}")]])
     await callback_query.message.edit_text(original_html_text, parse_mode="HTML", reply_markup=keyboard)
     await callback_query.answer("Удаление отменено.")
 
-
-# --- Процесс полного удаления ---
-
 @dp.message(UserState.waiting_for_deletion_confirmation)
 async def process_deletion_confirmation(message: types.Message, state: FSMContext):
     if not await check_access(message): return
-
     if message.text == "✅ Да, удалить всё":
         keyboard = ReplyKeyboardMarkup(keyboard=[[types.KeyboardButton(text="✅ Подтверждаю удаление")], [types.KeyboardButton(text="❌ Отменить удаление")]], resize_keyboard=True)
         await message.answer(
@@ -363,11 +361,9 @@ async def process_deletion_confirmation(message: types.Message, state: FSMContex
         await message.answer("↩️ Удаление отменено.", reply_markup=get_main_keyboard())
         await state.clear()
 
-
 @dp.message(UserState.waiting_for_final_confirmation)
 async def process_final_deletion(message: types.Message, state: FSMContext):
     if not await check_access(message): return
-
     if message.text == "✅ Подтверждаю удаление":
         if await delete_messages(message.from_user.id):
             await message.answer("🗑 Все записи успешно удалены!", reply_markup=get_main_keyboard())
@@ -377,17 +373,17 @@ async def process_final_deletion(message: types.Message, state: FSMContext):
         await message.answer("↩️ Удаление отменено.", reply_markup=get_main_keyboard())
     await state.clear()
 
-# --- Обработчик для всех остальных сообщений ---
-
 @dp.message()
-async def handle_other_messages(message: types.Message):
+async def handle_other_messages(message: types.Message, state: FSMContext):
     if not await check_access(message): return
-    # Явно создаем новую запись, если текст не является командой
-    await message.answer("Введите текст для новой записи:", reply_markup=get_cancel_keyboard())
-    await message.answer("Чтобы сохранить ссылку, просто отправьте ее. Для других действий используйте кнопки.")
-
-
-# --- Основная функция запуска ---
+    current_state = await state.get_state()
+    if current_state is None:
+        await state.set_state(UserState.waiting_for_text)
+        await process_text(message, state)
+    else:
+        await message.answer(
+            "Пожалуйста, завершите текущее действие или отмените его.",
+        )
 
 async def main():
     try:

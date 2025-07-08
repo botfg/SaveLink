@@ -40,7 +40,11 @@ def create_tags_keyboard(tags: list) -> ReplyKeyboardMarkup | None:
     if not tags:
         return None
 
-    kb_buttons = [[KeyboardButton(text=f"{tag} ({count})")] for tag, count in tags if tag != "no_tag"]
+    kb_buttons = []
+    # **(Исправление 2)**: Добавляем кнопку "Без тега" в поиск
+    for tag, count in tags:
+        display_text = "Без тега" if tag == "no_tag" else tag
+        kb_buttons.append([KeyboardButton(text=f"{display_text} ({count})")])
 
     if not kb_buttons:
         return None

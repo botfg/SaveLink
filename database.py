@@ -13,7 +13,7 @@ async def init_db():
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
                     message TEXT NOT NULL,
-                    description TEXT,
+                    name TEXT,
                     tag TEXT DEFAULT 'no_tag',
                     timestamp TEXT NOT NULL,
                     UNIQUE(user_id, message, tag)
@@ -35,10 +35,10 @@ async def validate_text(text: str) -> tuple[bool, str]:
         return False, "Текст не должен превышать 4096 символов!"
     return True, ""
 
-async def validate_description(description: str) -> tuple[bool, str]:
-    """Валидация описания."""
-    if description and len(description) > 1000:
-        return False, "Описание не должно превышать 1000 символов!"
+async def validate_name(name: str) -> tuple[bool, str]:
+    """Валидация названия."""
+    if name and len(name) > 1000:
+        return False, "Название не должно превышать 1000 символов!"
     return True, ""
 
 async def validate_tag(tag: str) -> tuple[bool, str]:
@@ -49,14 +49,14 @@ async def validate_tag(tag: str) -> tuple[bool, str]:
         return False, "Тег не должен превышать 100 символов!"
     return True, ""
 
-async def save_message(user_id: int, message: str, tag: str = "no_tag", description: str = None, timestamp: str = None):
+async def save_message(user_id: int, message: str, tag: str = "no_tag", name: str = None, timestamp: str = None):
     """Сохраняет новое сообщение в базу данных."""
     try:
         async with aiosqlite.connect('messages.db') as db:
             ts = timestamp or datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             await db.execute(
-                'INSERT INTO messages (user_id, message, tag, description, timestamp) VALUES (?, ?, ?, ?, ?)',
-                (user_id, message, tag.strip(), description, ts)
+                'INSERT INTO messages (user_id, message, tag, name, timestamp) VALUES (?, ?, ?, ?, ?)',
+                (user_id, message, tag.strip(), name, ts)
             )
             await db.commit()
             return True
@@ -68,14 +68,27 @@ async def save_message(user_id: int, message: str, tag: str = "no_tag", descript
         return False
 
 async def get_messages(user_id: int):
-    """Получает все сообщения пользователя."""
+    """Получает все сообщения пользователя, отсортированные по дате."""
     try:
         async with aiosqlite.connect('messages.db') as db:
-            async with db.execute('SELECT id, message, tag, description, timestamp FROM messages WHERE user_id = ? ORDER BY timestamp DESC', (user_id,)) as cursor:
+            async with db.execute('SELECT id, message, tag, name, timestamp FROM messages WHERE user_id = ? ORDER BY timestamp DESC', (user_id,)) as cursor:
                 return await cursor.fetchall()
     except aiosqlite.Error as e:
         logging.error(f"Failed to get messages for user {user_id}: {e}")
         return []
+
+async def get_message_by_id(user_id: int, message_id: int):
+    """Получает одно сообщение по его ID и ID пользователя."""
+    try:
+        async with aiosqlite.connect('messages.db') as db:
+            async with db.execute(
+                'SELECT id, message, tag, name, timestamp FROM messages WHERE id = ? AND user_id = ?',
+                (message_id, user_id)
+            ) as cursor:
+                return await cursor.fetchone()
+    except aiosqlite.Error as e:
+        logging.error(f"Failed to get message by id {message_id} for user {user_id}: {e}")
+        return None
 
 async def get_tags(user_id: int):
     """Получает все уникальные теги пользователя и количество записей для каждого."""
@@ -91,7 +104,7 @@ async def get_messages_by_tag(user_id: int, tag: str):
     """Получает все сообщения пользователя по определенному тегу."""
     try:
         async with aiosqlite.connect('messages.db') as db:
-            cursor = await db.execute("SELECT id, message, description, timestamp FROM messages WHERE user_id = ? AND tag = ? ORDER BY timestamp DESC", (user_id, tag))
+            cursor = await db.execute("SELECT id, message, name, timestamp FROM messages WHERE user_id = ? AND tag = ? ORDER BY timestamp DESC", (user_id, tag))
             return await cursor.fetchall()
     except aiosqlite.Error as e:
         logging.error(f"Failed to get messages by tag '{tag}' for user {user_id}: {e}")
