@@ -13,7 +13,8 @@ from aiogram.types import (
 )
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.storage.redis import RedisStorage
+from redis.asyncio.client import Redis
 
 # Локальные импорты
 from config_reader import config
@@ -38,9 +39,13 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Константы
 ALLOWED_USER_ID = config.allowed_user_id
 
+# Инициализация Redis и хранилища
+redis_client = Redis(host=config.redis_host, port=config.redis_port)
+storage = RedisStorage(redis=redis_client)
+
 # Инициализация бота и диспетчера
 bot = Bot(token=config.bot_token.get_secret_value())
-dp = Dispatcher(storage=MemoryStorage())
+dp = Dispatcher(storage=storage)
 
 
 def is_url(text: str) -> bool:
