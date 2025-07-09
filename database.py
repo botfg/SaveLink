@@ -136,3 +136,38 @@ async def update_record_field(record_id: int, field: str, value: str):
         logging.error(f"Не удалось обновить запись {record_id}: {e}")
         return False
 
+# (ИЗМЕНЕНИЕ): Новая функция для получения статистики
+async def get_stats(user_id: int):
+    """
+    Собирает статистику по записям пользователя.
+    Возвращает словарь со статистикой или None в случае ошибки.
+    """
+    try:
+        async with pool.acquire() as connection:
+            # Общее количество записей
+            total_records_result = await connection.fetchval(
+                'SELECT COUNT(*) FROM messages WHERE user_id = $1',
+                user_id
+            )
+
+            # Количество уникальных тегов (исключая 'no_tag')
+            total_tags_result = await connection.fetchval(
+                "SELECT COUNT(DISTINCT tag) FROM messages WHERE user_id = $1 AND tag != 'no_tag'",
+                user_id
+            )
+
+            # Самый популярный тег
+            most_popular_tag_result = await connection.fetchrow(
+                "SELECT tag, COUNT(*) as count FROM messages WHERE user_id = $1 AND tag != 'no_tag' "
+                "GROUP BY tag ORDER BY count DESC, tag ASC LIMIT 1",
+                user_id
+            )
+
+            return {
+                "total_records": total_records_result or 0,
+                "total_tags": total_tags_result or 0,
+                "popular_tag_info": most_popular_tag_result # Может быть None
+            }
+    except Exception as e:
+        logging.error(f"Не удалось получить статистику для пользователя {user_id}: {e}")
+        return None

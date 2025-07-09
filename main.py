@@ -22,7 +22,7 @@ from database import (
     init_db, save_message, get_messages, get_tags,
     get_messages_by_tag, delete_messages, delete_message_by_id,
     validate_text, validate_name, validate_tag, get_message_by_id,
-    update_record_field
+    update_record_field, get_stats
 )
 from keyboards import (
     get_main_keyboard, get_extra_keyboard, get_tag_choice_keyboard,
@@ -268,6 +268,35 @@ async def extra_menu_handler(message: types.Message):
         "Дополнительные действия:",
         reply_markup=get_extra_keyboard()
     )
+
+@dp.message(F.text == "📊 Статистика")
+async def stats_handler(message: types.Message):
+    if not await check_access(message): return
+
+    stats = await get_stats(message.from_user.id)
+
+    if stats is None:
+        await message.answer("❌ Не удалось получить статистику. Попробуйте позже.")
+        return
+
+    total_records = stats['total_records']
+    total_tags = stats['total_tags']
+    popular_tag_info = stats['popular_tag_info']
+
+    if popular_tag_info:
+        popular_tag_text = f"<b>Самый популярный тег:</b> {html.escape(popular_tag_info['tag'])} ({popular_tag_info['count']} записей)"
+    else:
+        popular_tag_text = "<b>Самый популярный тег:</b> (нет тегов)"
+
+    response_text = (
+        "📊 <b>Ваша статистика:</b>\n\n"
+        f"<b>Всего записей:</b> {total_records}\n"
+        f"<b>Уникальных тегов:</b> {total_tags}\n"
+        f"{popular_tag_text}"
+    )
+
+    await message.answer(response_text, parse_mode="HTML")
+
 
 @dp.message(F.text == "🔙 Назад")
 async def back_to_main_handler(message: types.Message):

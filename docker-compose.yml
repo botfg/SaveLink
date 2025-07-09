@@ -1,0 +1,46 @@
+services:
+  # Сервис для Telegram-бота
+  bot:
+    build: .
+    container_name: savelink_bot
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - savelink_network
+
+  # Сервис для базы данных PostgreSQL
+  postgres:
+    image: postgres:16-alpine
+    container_name: savelink_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - savelink_network
+
+  # Сервис для Redis
+  redis:
+    image: redis:7-alpine
+    container_name: savelink_redis
+    restart: always
+    volumes:
+      - redis_data:/data
+    networks:
+      - savelink_network
+
+# Определяем сети и тома для хранения данных
+networks:
+  savelink_network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
