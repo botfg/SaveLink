@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import subprocess
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -99,4 +98,3 @@ def setup_scheduler(bot, user_id: int):
     )
     scheduler.start()
     logging.info("Планировщик запущен. Первый бекап будет создан немедленно, последующие - каждые 2 недели.")
-

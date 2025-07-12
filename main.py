@@ -3,7 +3,6 @@ import re
 import logging
 import html
 import os
-import subprocess
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, types, F
@@ -49,11 +48,19 @@ dp = Dispatcher(storage=storage)
 
 
 def is_url(text: str) -> bool:
-    """Проверяет, является ли текст URL-адресом."""
+    """Проверяет, является ли текст валидным URL-адресом, который занимает всю строку."""
+    if not isinstance(text, str):
+        return False
+    # Этот паттерн требует наличия схемы http/https и не позволяет иметь лишний текст в строке
     url_pattern = re.compile(
-        r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'
-    )
-    return bool(url_pattern.match(text))
+        r'^https?://'  # Протокол в начале строки
+        r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # домен...
+        r'localhost|'  # или localhost...
+        r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # или IP
+        r'(?::\d+)?'  # порт
+        r'(?:/?|[/?]\S+)$', re.IGNORECASE)
+    # Используем fullmatch, чтобы убедиться, что вся строка является URL
+    return bool(re.fullmatch(url_pattern, text.strip()))
 
 
 async def check_access(message: types.Message | types.CallbackQuery) -> bool:
@@ -88,7 +95,16 @@ async def cmd_start(message: types.Message, state: FSMContext):
         reply_markup=get_main_keyboard()
     )
 
-# --- Обработчик отмены ---
+# --- FSM для создания новой записи ---
+
+@dp.message(F.text == "✍️ Создать запись")
+async def new_note_handler(message: types.Message, state: FSMContext):
+    """Начинает процесс создания новой записи по кнопке."""
+    if not await check_access(message): return
+    await state.set_state(UserState.waiting_for_text)
+    # (ИЗМЕНЕНИЕ): Сообщение изменено по запросу пользователя
+    await message.answer("введи ссылку для вашей новой записи", reply_markup=get_cancel_keyboard())
+
 
 @dp.message(F.text == "❌ Отменить")
 async def cancel_action(message: types.Message, state: FSMContext):
@@ -97,7 +113,6 @@ async def cancel_action(message: types.Message, state: FSMContext):
         await state.clear()
     await message.answer("Действие отменено. Выберите действие:", reply_markup=get_main_keyboard())
 
-# --- FSM для создания новой записи ---
 
 @dp.message(UserState.waiting_for_text)
 async def process_text(message: types.Message, state: FSMContext):
@@ -604,7 +619,7 @@ async def process_save_url_callback(callback_query: CallbackQuery, state: FSMCon
     url = data.get("temp_url")
     if url:
         await state.update_data(user_text=url)
-        await callback_query.message.edit_text("Ссылка будет сохранена. Введите название или нажмите 'Пропустить'.")
+        await callback_query.message.edit_text("Ссылка будет сохранена. Теперь введите название или нажмите 'Пропустить'.")
         await callback_query.message.answer("Введите название для ссылки:", reply_markup=get_skip_keyboard())
         await state.set_state(UserState.waiting_for_name)
     else:
@@ -675,17 +690,28 @@ async def process_final_deletion(message: types.Message, state: FSMContext):
         await message.answer("↩️ Удаление отменено.", reply_markup=get_main_keyboard())
     await state.clear()
 
+# (ИЗМЕНЕНИЕ): Обработчик для любого текста, который не является командой или URL
 @dp.message()
-async def handle_other_messages(message: types.Message, state: FSMContext):
+async def handle_text_message(message: types.Message, state: FSMContext):
+    """
+    Обрабатывает текстовые сообщения. Если это не URL и не команда с клавиатуры,
+    начинает процесс создания новой заметки.
+    """
     if not await check_access(message): return
+
+    # Проверяем, не находимся ли мы уже в каком-то процессе
     current_state = await state.get_state()
-    if current_state is None:
-        await state.set_state(UserState.waiting_for_text)
-        await process_text(message, state)
-    else:
+    if current_state is not None:
         await message.answer(
-            "Пожалуйста, завершите текущее действие или отмените его.",
+            "Пожалуйста, завершите текущее действие или отмените его с помощью кнопки «❌ Отменить».",
         )
+        return
+
+    # Если это не URL (проверяется раньше) и не команда с клавиатуры,
+    # начинаем процесс создания заметки, передавая текущее сообщение
+    await state.set_state(UserState.waiting_for_text)
+    await process_text(message, state)
+
 
 async def main():
     try:

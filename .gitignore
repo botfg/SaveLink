@@ -7,3 +7,4 @@ token.json
 venv/
 *.pyc
 credentials.json:Zone.Identifier
+logs/
