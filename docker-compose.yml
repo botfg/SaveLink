@@ -1,16 +1,46 @@
+# Определяем все секреты, которые будут использоваться
+secrets:
+  bot_token:
+    file: ./secrets/bot_token
+  allowed_user_id:
+    file: ./secrets/allowed_user_id
+  db_dsn:
+    file: ./secrets/db_dsn
+  redis_host:
+    file: ./secrets/redis_host
+  redis_port:
+    file: ./secrets/redis_port
+  postgres_user:
+    file: ./secrets/postgres_user
+  postgres_password:
+    file: ./secrets/postgres_password
+  postgres_db:
+    file: ./secrets/postgres_db
+
 services:
   # Сервис для Telegram-бота
   bot:
     build: .
     container_name: savelink_bot
     restart: always
-    env_file:
-      - .env
+    secrets:
+      - bot_token
+      - allowed_user_id
+      - db_dsn
+      - redis_host
+      - redis_port
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - savelink_network
+    volumes:
+      - ./logs:/app/logs
 
   # Сервис для базы данных PostgreSQL
   postgres:
@@ -18,13 +48,22 @@ services:
     container_name: savelink_postgres
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER_FILE: /run/secrets/postgres_user
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      POSTGRES_DB_FILE: /run/secrets/postgres_db
+    secrets:
+      - postgres_user
+      - postgres_password
+      - postgres_db
     volumes:
       - postgres_data:/var/lib/postgresql/data
     networks:
       - savelink_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$(cat /run/secrets/postgres_user) -d $$(cat /run/secrets/postgres_db)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   # Сервис для Redis
   redis:
@@ -35,8 +74,12 @@ services:
       - redis_data:/data
     networks:
       - savelink_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-# Определяем сети и тома для хранения данных
 networks:
   savelink_network:
     driver: bridge

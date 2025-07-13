@@ -8,3 +8,4 @@ venv/
 *.pyc
 credentials.json:Zone.Identifier
 logs/
+secrets/
