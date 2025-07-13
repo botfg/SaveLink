@@ -2,10 +2,7 @@
 .DS_Store
 messages.db
 __pycache__
-credentials.json
-token.json
 venv/
 *.pyc
-credentials.json:Zone.Identifier
 logs/
 secrets/

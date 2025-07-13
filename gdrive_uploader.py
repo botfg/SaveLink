@@ -8,6 +8,10 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
+# (ИЗМЕНЕНИЕ): Указываем пути к файлам-секретам внутри контейнера
+CREDENTIALS_PATH = '/run/secrets/credentials'
+TOKEN_PATH = '/run/secrets/token'
+
 # Области доступа. Если меняете их, удалите файл token.json.
 SCOPES = ['https://www.googleapis.com/auth/drive.file']
 
@@ -15,23 +19,47 @@ def get_drive_service():
     """Аутентифицируется и возвращает сервис для работы с Google Drive API."""
     creds = None
     # Файл token.json хранит токены доступа и обновления пользователя.
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    if os.path.exists(TOKEN_PATH):
+        creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
 
     # Если нет валидных данных, запускаем процесс аутентификации.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
             try:
-                flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-                creds = flow.run_local_server(port=0)
-            except FileNotFoundError:
-                logging.error("Файл credentials.json не найден. Убедитесь, что он находится в корневой папке проекта.")
+                creds.refresh(Request())
+            except Exception as e:
+                logging.error(f"Не удалось обновить токен. Возможно, его нужно пересоздать вручную. Ошибка: {e}")
+                # Если обновление не удалось, пробуем создать заново
+                creds = None 
+        
+        # Если creds все еще нет, создаем новый
+        if not creds:
+            try:
+                # Этот код сработает, если token.json отсутствует или невалиден.
+                # Для первого запуска в Docker убедитесь, что вы сгенерировали
+                # credentials.json и token.json локально и поместили их
+                # рядом с docker-compose.yml на хост-машине.
+                flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
+                # ВАЖНО: Внутри Docker нет браузера, поэтому run_local_server не сработает.
+                # Токен должен быть сгенерирован заранее.
+                # creds = flow.run_local_server(port=0) 
+                logging.warning("Не удалось найти валидный token.json. Пожалуйста, убедитесь, что он сгенерирован и доступен как Docker-секрет.")
                 return None
-        # Сохраняем данные для следующего запуска
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
+            except FileNotFoundError:
+                logging.error(f"Файл секрета {CREDENTIALS_PATH} не найден внутри контейнера. Убедитесь, что он правильно подключен в docker-compose.yml.")
+                return None
+            except Exception as e:
+                logging.error(f"Не удалось запустить процесс аутентификации: {e}")
+                return None
+
+        # ВАЖНО: Директория /run/secrets/ является read-only.
+        # Если токен обновляется, он не будет сохранен обратно в файл секрета.
+        # Для долгоживущих приложений (как этот бот), это обычно не проблема,
+        # так как токен обновления живет долго. Если он все же истечет,
+        # вам нужно будет вручную пересоздать token.json на хост-машине.
+        #
+        # with open(TOKEN_PATH, 'w') as token:
+        #     token.write(creds.to_json())
 
     try:
         service = build('drive', 'v3', credentials=creds)

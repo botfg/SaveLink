@@ -16,6 +16,10 @@ secrets:
     file: ./secrets/postgres_password
   postgres_db:
     file: ./secrets/postgres_db
+  token:
+    file: ./secrets/token
+  credentials:
+    file: ./secrets/credentials
 
 services:
   # Сервис для Telegram-бота
@@ -29,6 +33,8 @@ services:
       - db_dsn
       - redis_host
       - redis_port
+      - token
+      - credentials
     dns:
       - 8.8.8.8
       - 8.8.4.4
